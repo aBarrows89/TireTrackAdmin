@@ -11,6 +11,8 @@ export function Protected({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!isLoading && !admin) {
       router.push("/login");
+    } else if (!isLoading && admin?.forcePasswordChange) {
+      router.push("/change-password");
     }
   }, [admin, isLoading, router]);
 
@@ -22,7 +24,7 @@ export function Protected({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!admin) {
+  if (!admin || admin.forcePasswordChange) {
     return null;
   }
 

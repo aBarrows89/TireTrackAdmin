@@ -428,3 +428,262 @@ export const deleteUser = mutation({
     return { success: true };
   },
 });
+
+export const batchImportUPCs = mutation({
+  args: {
+    upcs: v.array(v.object({
+      upc: v.string(),
+      brand: v.string(),
+      model: v.string(),
+      size: v.string(),
+      inventoryNumber: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    let inserted = 0;
+    let skipped = 0;
+    
+    for (const tire of args.upcs) {
+      // Skip if UPC already exists
+      const existing = await ctx.db
+        .query("tireUPCs")
+        .withIndex("by_upc", (q) => q.eq("upc", tire.upc))
+        .first();
+      
+      if (existing) {
+        skipped++;
+        continue;
+      }
+      
+      await ctx.db.insert("tireUPCs", {
+        upc: tire.upc,
+        brand: tire.brand,
+        model: tire.model,
+        size: tire.size,
+        inventoryNumber: tire.inventoryNumber,
+      });
+      inserted++;
+    }
+    
+    return { inserted, skipped };
+  },
+});
+
+export const addSingleUPC = mutation({
+  args: {
+    upc: v.string(),
+    brand: v.string(),
+    model: v.string(),
+    size: v.string(),
+    inventoryNumber: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("tireUPCs")
+      .withIndex("by_upc", (q) => q.eq("upc", args.upc))
+      .first();
+    
+    if (existing) {
+      return { success: false, error: "UPC already exists" };
+    }
+    
+    const id = await ctx.db.insert("tireUPCs", args);
+    return { success: true, id };
+  },
+});
+
+export const updateUPC = mutation({
+  args: {
+    id: v.id("tireUPCs"),
+    upc: v.optional(v.string()),
+    brand: v.optional(v.string()),
+    model: v.optional(v.string()),
+    size: v.optional(v.string()),
+    inventoryNumber: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { id, ...updates } = args;
+    const filteredUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([_, v]) => v !== undefined)
+    );
+    await ctx.db.patch(id, filteredUpdates);
+    return { success: true };
+  },
+});
+
+export const deleteUPC = mutation({
+  args: { id: v.id("tireUPCs") },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.id);
+    return { success: true };
+  },
+});
+
+export const updateReturnItemStatus = mutation({
+  args: {
+    itemId: v.id("returnItems"),
+    status: v.union(v.literal("pending"), v.literal("processed"), v.literal("not_processed")),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.itemId, {
+      status: args.status,
+      ...(args.notes !== undefined && { notes: args.notes }),
+    });
+    return { success: true };
+  },
+});
+
+export const updateReturnItem = mutation({
+  args: {
+    itemId: v.id("returnItems"),
+    poNumber: v.optional(v.string()),
+    invNumber: v.optional(v.string()),
+    tireBrand: v.optional(v.string()),
+    tireModel: v.optional(v.string()),
+    tireSize: v.optional(v.string()),
+    quantity: v.optional(v.number()),
+    status: v.optional(v.union(v.literal("pending"), v.literal("processed"), v.literal("not_processed"))),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { itemId, ...updates } = args;
+    const filteredUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([_, v]) => v !== undefined)
+    );
+    await ctx.db.patch(itemId, filteredUpdates);
+    return { success: true };
+  },
+});
+
+export const deleteReturnItem = mutation({
+  args: { itemId: v.id("returnItems") },
+  handler: async (ctx, args) => {
+    const item = await ctx.db.get(args.itemId);
+    if (item) {
+      const batch = await ctx.db.get(item.returnBatchId);
+      if (batch) {
+        await ctx.db.patch(item.returnBatchId, {
+          itemCount: Math.max(0, batch.itemCount - (item.quantity || 1)),
+        });
+      }
+    }
+    await ctx.db.delete(args.itemId);
+    return { success: true };
+  },
+});
+
+export const deleteReturnBatch = mutation({
+  args: { batchId: v.id("returnBatches") },
+  handler: async (ctx, args) => {
+    // Delete all items in the batch first
+    const items = await ctx.db
+      .query("returnItems")
+      .withIndex("by_batch", (q) => q.eq("returnBatchId", args.batchId))
+      .collect();
+    
+    for (const item of items) {
+      await ctx.db.delete(item._id);
+    }
+    
+    // Delete the batch
+    await ctx.db.delete(args.batchId);
+    return { success: true, deletedItems: items.length };
+  },
+});
+
+export const createAppUser = mutation({
+  args: {
+    empId: v.string(),
+    name: v.string(),
+    pin: v.string(),
+    locationId: v.string(),
+    locationName: v.string(),
+    role: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Check if empId already exists
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_empId", (q) => q.eq("empId", args.empId))
+      .first();
+    
+    if (existing) {
+      return { success: false, error: "Employee ID already exists" };
+    }
+    
+    const userId = await ctx.db.insert("users", {
+      base44Id: `local_${Date.now()}`,
+      empId: args.empId,
+      name: args.name,
+      pin: args.pin,
+      locationId: args.locationId,
+      locationName: args.locationName,
+      role: args.role || "user",
+      isActive: true,
+    });
+
+    return { success: true, userId };
+  },
+});
+
+// Admin close truck (no user/security tag required)
+export const adminCloseTruck = mutation({
+  args: { truckId: v.id("trucks") },
+  handler: async (ctx, args) => {
+    const truck = await ctx.db.get(args.truckId);
+    if (!truck) {
+      return { success: false, error: "Truck not found" };
+    }
+    if (truck.status === "closed") {
+      return { success: false, error: "Truck already closed" };
+    }
+    await ctx.db.patch(args.truckId, {
+      status: "closed",
+      closedAt: Date.now(),
+    });
+    return { success: true };
+  },
+});
+
+// Auto-close all open trucks (for nightly batch)
+export const autoCloseAllTrucks = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const openTrucks = await ctx.db
+      .query("trucks")
+      .filter((q) => q.eq(q.field("status"), "open"))
+      .collect();
+
+    let closed = 0;
+    for (const truck of openTrucks) {
+      await ctx.db.patch(truck._id, {
+        status: "closed",
+        closedAt: Date.now(),
+      });
+      closed++;
+    }
+    return { success: true, closed };
+  },
+});
+
+// Migration: Normalize all truck locationIds to lowercase "latrobe" and fill empty ones
+export const normalizeTruckLocations = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const trucks = await ctx.db.query("trucks").collect();
+    let updated = 0;
+
+    for (const truck of trucks) {
+      const currentLocation = truck.locationId || "";
+      const normalizedLocation = currentLocation.toLowerCase() || "latrobe";
+
+      if (currentLocation !== normalizedLocation) {
+        await ctx.db.patch(truck._id, { locationId: normalizedLocation });
+        updated++;
+      }
+    }
+
+    return { success: true, updated, total: trucks.length };
+  },
+});

@@ -33,6 +33,7 @@ export const createFirstAdmin = mutation({
       allowedLocations: ["all"],
       isActive: true,
       createdAt: Date.now(),
+      forcePasswordChange: false,
     });
     
     return { success: true, adminId };
@@ -66,7 +67,6 @@ export const login = mutation({
     // Update last login
     await ctx.db.patch(admin._id, { lastLoginAt: Date.now() });
     
-    // Return user info (token will be created client-side for now)
     return {
       success: true,
       admin: {
@@ -75,6 +75,7 @@ export const login = mutation({
         name: admin.name,
         role: admin.role,
         allowedLocations: admin.allowedLocations,
+        forcePasswordChange: admin.forcePasswordChange || false,
       },
     };
   },
@@ -93,11 +94,12 @@ export const getAdmin = query({
       name: admin.name,
       role: admin.role,
       allowedLocations: admin.allowedLocations,
+      forcePasswordChange: admin.forcePasswordChange || false,
     };
   },
 });
 
-// Create new admin (superadmin only)
+// Create new admin (superadmin only) - with temp password
 export const createAdmin = mutation({
   args: {
     email: v.string(),
@@ -107,7 +109,6 @@ export const createAdmin = mutation({
     allowedLocations: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    // Check if email already exists
     const existing = await ctx.db
       .query("adminUsers")
       .withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase()))
@@ -125,6 +126,8 @@ export const createAdmin = mutation({
       allowedLocations: args.allowedLocations,
       isActive: true,
       createdAt: Date.now(),
+      forcePasswordChange: true,
+      tempPasswordSetAt: Date.now(),
     });
     
     return { success: true, adminId };
@@ -150,7 +153,7 @@ export const updateAdmin = mutation({
   },
 });
 
-// Change password
+// Change password (also clears forcePasswordChange)
 export const changePassword = mutation({
   args: {
     adminId: v.id("adminUsers"),
@@ -167,8 +170,31 @@ export const changePassword = mutation({
       return { success: false, error: "Current password incorrect" };
     }
     
+    if (args.newPassword.length < 8) {
+      return { success: false, error: "Password must be at least 8 characters" };
+    }
+    
     await ctx.db.patch(args.adminId, {
       passwordHash: simpleHash(args.newPassword),
+      forcePasswordChange: false,
+      tempPasswordSetAt: undefined,
+    });
+    
+    return { success: true };
+  },
+});
+
+// Reset password (superadmin sets new temp password for another admin)
+export const resetAdminPassword = mutation({
+  args: {
+    adminId: v.id("adminUsers"),
+    newPassword: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.adminId, {
+      passwordHash: simpleHash(args.newPassword),
+      forcePasswordChange: true,
+      tempPasswordSetAt: Date.now(),
     });
     
     return { success: true };
@@ -189,6 +215,7 @@ export const getAllAdmins = query({
       isActive: a.isActive,
       createdAt: a.createdAt,
       lastLoginAt: a.lastLoginAt,
+      forcePasswordChange: a.forcePasswordChange || false,
     }));
   },
 });

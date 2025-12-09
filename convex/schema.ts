@@ -21,10 +21,12 @@ export default defineSchema({
     passwordHash: v.string(),
     name: v.string(),
     role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
-    allowedLocations: v.array(v.string()), // ["latrobe", "everson", "chestnut"] or ["all"]
+    allowedLocations: v.array(v.string()),
     isActive: v.boolean(),
     createdAt: v.number(),
     lastLoginAt: v.optional(v.number()),
+    forcePasswordChange: v.optional(v.boolean()),
+    tempPasswordSetAt: v.optional(v.number()),
   }).index("by_email", ["email"]),
 
   locations: defineTable({
@@ -104,7 +106,9 @@ export default defineSchema({
     scannedBy: v.id("users"),
     scannedAt: v.number(),
     status: v.string(),
-  }).index("by_batch", ["returnBatchId"]),
+    notes: v.optional(v.string()),
+  }).index("by_batch", ["returnBatchId"])
+    .index("by_status", ["status"]),
 
   tireUPCs: defineTable({
     upc: v.string(),
@@ -114,4 +118,21 @@ export default defineSchema({
     inventoryNumber: v.optional(v.string()),
     auctionTitle: v.optional(v.string()),
   }).index("by_upc", ["upc"]),
+
+  // Audit log for tracking admin actions
+  auditLogs: defineTable({
+    action: v.string(), // e.g., "truck.delete", "user.create", "admin.login"
+    actionType: v.string(), // "create", "update", "delete", "login", "export"
+    resourceType: v.string(), // "truck", "user", "admin", "scan", "batch"
+    resourceId: v.optional(v.string()),
+    adminId: v.optional(v.id("adminUsers")),
+    adminEmail: v.optional(v.string()),
+    adminName: v.optional(v.string()),
+    details: v.optional(v.string()), // JSON string with additional details
+    ipAddress: v.optional(v.string()),
+    timestamp: v.number(),
+  }).index("by_timestamp", ["timestamp"])
+    .index("by_admin", ["adminId"])
+    .index("by_action", ["action"])
+    .index("by_resource", ["resourceType", "resourceId"]),
 });

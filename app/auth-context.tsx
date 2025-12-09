@@ -10,13 +10,15 @@ type Admin = {
   name: string;
   role: "superadmin" | "admin" | "viewer";
   allowedLocations: string[];
+  forcePasswordChange: boolean;
 };
 
 type AuthContextType = {
   admin: Admin | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; forcePasswordChange?: boolean }>;
   logout: () => void;
+  updateAdminState: (updates: Partial<Admin>) => void;
   canManageAdmins: boolean;
   canEdit: boolean;
 };
@@ -41,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const parsed = JSON.parse(stored);
         setAdminId(parsed.id);
+        setAdmin(parsed);
       } catch {
         localStorage.removeItem("adminSession");
       }
@@ -51,9 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Update admin when query returns
   useEffect(() => {
     if (adminData) {
-      setAdmin(adminData as Admin);
+      const updatedAdmin = adminData as Admin;
+      setAdmin(updatedAdmin);
+      localStorage.setItem("adminSession", JSON.stringify(updatedAdmin));
     } else if (adminData === null && adminId) {
-      // Admin not found or deactivated
       localStorage.removeItem("adminSession");
       setAdminId(null);
       setAdmin(null);
@@ -66,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("adminSession", JSON.stringify(result.admin));
       setAdminId(result.admin.id);
       setAdmin(result.admin as Admin);
-      return { success: true };
+      return { success: true, forcePasswordChange: result.admin.forcePasswordChange };
     }
     return { success: false, error: result.error };
   };
@@ -77,11 +81,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAdmin(null);
   };
 
+  const updateAdminState = (updates: Partial<Admin>) => {
+    if (admin) {
+      const updated = { ...admin, ...updates };
+      setAdmin(updated);
+      localStorage.setItem("adminSession", JSON.stringify(updated));
+    }
+  };
+
   const canManageAdmins = admin?.role === "superadmin";
   const canEdit = admin?.role === "superadmin" || admin?.role === "admin";
 
   return (
-    <AuthContext.Provider value={{ admin, isLoading, login, logout, canManageAdmins, canEdit }}>
+    <AuthContext.Provider value={{ admin, isLoading, login, logout, updateAdminState, canManageAdmins, canEdit }}>
       {children}
     </AuthContext.Provider>
   );
