@@ -1,65 +1,95 @@
-import Image from "next/image";
+"use client";
+
+import { useQuery } from "convex/react";
+import { api } from "../convex/_generated/api";
+import { useState } from "react";
 
 export default function Home() {
+  const [selectedTruck, setSelectedTruck] = useState<string | null>(null);
+  
+  const trucks = useQuery(api.queries.getAllTrucks);
+  const scans = useQuery(
+    api.queries.getTruckScans,
+    selectedTruck ? { truckId: selectedTruck as any } : "skip"
+  );
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="min-h-screen bg-gray-900 text-white p-8">
+      <h1 className="text-3xl font-bold mb-8">TireTrack Admin</h1>
+      
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Trucks List */}
+        <div className="bg-gray-800 rounded-lg p-6">
+          <h2 className="text-xl font-semibold mb-4">Trucks</h2>
+          {trucks === undefined ? (
+            <p>Loading...</p>
+          ) : (
+            <div className="space-y-2">
+              {trucks.map((truck) => (
+                <button
+                  key={truck._id}
+                  onClick={() => setSelectedTruck(truck._id)}
+                  className={`w-full text-left p-3 rounded ${
+                    selectedTruck === truck._id
+                      ? "bg-blue-600"
+                      : "bg-gray-700 hover:bg-gray-600"
+                  }`}
+                >
+                  <div className="font-medium">{truck.truckNumber}</div>
+                  <div className="text-sm text-gray-400">
+                    {truck.carrier} • {truck.status} • {truck.scanCount || 0} scans
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Scans List */}
+        <div className="lg:col-span-2 bg-gray-800 rounded-lg p-6">
+          <h2 className="text-xl font-semibold mb-4">
+            Scans {selectedTruck && `(${scans?.length || 0})`}
+          </h2>
+          {!selectedTruck ? (
+            <p className="text-gray-400">Select a truck to view scans</p>
+          ) : scans === undefined ? (
+            <p>Loading...</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-400 border-b border-gray-700">
+                    <th className="pb-2">Tracking #</th>
+                    <th className="pb-2">Vendor</th>
+                    <th className="pb-2">Destination</th>
+                    <th className="pb-2">Scanned At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scans.map((scan) => (
+                    <tr key={scan._id} className="border-b border-gray-700">
+                      <td className="py-2 font-mono">{scan.trackingNumber}</td>
+                      <td className="py-2">
+                        <span className={`px-2 py-1 rounded text-xs ${
+                          scan.vendor === "Unknown" 
+                            ? "bg-red-900 text-red-300"
+                            : "bg-green-900 text-green-300"
+                        }`}>
+                          {scan.vendor || "Unknown"}
+                        </span>
+                      </td>
+                      <td className="py-2">{scan.destination}</td>
+                      <td className="py-2 text-gray-400">
+                        {new Date(scan.scannedAt).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }

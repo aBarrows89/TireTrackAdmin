@@ -1,0 +1,104 @@
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export default defineSchema({
+  users: defineTable({
+    base44Id: v.string(),
+    empId: v.string(),
+    name: v.string(),
+    pin: v.string(),
+    locationId: v.string(),
+    locationName: v.string(),
+    role: v.optional(v.string()),
+    isActive: v.boolean(),
+  }).index("by_empId", ["empId"])
+    .index("by_base44Id", ["base44Id"]),
+
+  locations: defineTable({
+    base44Id: v.string(),
+    name: v.string(),
+    code: v.string(),
+    isActive: v.boolean(),
+  }).index("by_code", ["code"]),
+
+ trucks: defineTable({
+  base44Id: v.optional(v.string()),
+  truckNumber: v.string(),
+  carrier: v.string(),
+  status: v.string(),
+  locationId: v.string(),
+  openedBy: v.id("users"),
+  openedAt: v.number(),
+  closedAt: v.optional(v.number()),
+  closedBy: v.optional(v.id("users")),
+  securityTag: v.optional(v.string()),
+  syncedToBase44: v.optional(v.boolean()),
+  scanCount: v.optional(v.number()),
+}).index("by_location_status", ["locationId", "status"])
+  .index("by_base44Id", ["base44Id"]),
+
+  scans: defineTable({
+    truckId: v.id("trucks"),
+    trackingNumber: v.string(),
+    carrier: v.optional(v.string()),
+    destination: v.string(),
+    recipientName: v.optional(v.string()),
+    address: v.optional(v.string()),
+    city: v.optional(v.string()),
+    state: v.optional(v.string()),
+    rawBarcode: v.string(),
+    scannedBy: v.id("users"),
+    scannedAt: v.number(),
+    scanType: v.optional(v.string()),
+    vendor: v.optional(v.string()),
+    vendorAccount: v.optional(v.string()),
+  }).index("by_truck", ["truckId"])
+    .index("by_vendor", ["vendor"]),
+
+  vendorAccounts: defineTable({
+    accountNumber: v.string(),
+    vendorName: v.string(),
+    carrier: v.string(),
+  }).index("by_account", ["accountNumber"]),
+
+  returnBatches: defineTable({
+    base44Id: v.optional(v.string()),
+    batchNumber: v.optional(v.string()),
+    status: v.string(),
+    locationId: v.string(),
+    openedBy: v.id("users"),
+    openedAt: v.number(),
+    closedAt: v.optional(v.number()),
+    closedBy: v.optional(v.id("users")),
+    itemCount: v.number(),
+  }).index("by_location_status", ["locationId", "status"])
+    .index("by_base44Id", ["base44Id"]),
+
+  returnItems: defineTable({
+    returnBatchId: v.id("returnBatches"),
+    base44Id: v.optional(v.string()),
+    poNumber: v.optional(v.string()),
+    invNumber: v.optional(v.string()),
+    fromAddress: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+    rawText: v.optional(v.string()),
+    aiConfidence: v.optional(v.string()),
+    upcCode: v.optional(v.string()),
+    tireBrand: v.optional(v.string()),
+    tireModel: v.optional(v.string()),
+    tireSize: v.optional(v.string()),
+    quantity: v.optional(v.number()),
+    scannedBy: v.id("users"),
+    scannedAt: v.number(),
+    status: v.string(),
+  }).index("by_batch", ["returnBatchId"]),
+
+  tireUPCs: defineTable({
+    upc: v.string(),
+    brand: v.string(),
+    model: v.string(),
+    size: v.string(),
+    inventoryNumber: v.optional(v.string()),
+    auctionTitle: v.optional(v.string()),
+  }).index("by_upc", ["upc"]),
+});
