@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  // Warehouse app users (mobile app login)
   users: defineTable({
     base44Id: v.string(),
     empId: v.string(),
@@ -14,6 +15,18 @@ export default defineSchema({
   }).index("by_empId", ["empId"])
     .index("by_base44Id", ["base44Id"]),
 
+  // Admin users for dashboard (separate from warehouse app users)
+  adminUsers: defineTable({
+    email: v.string(),
+    passwordHash: v.string(),
+    name: v.string(),
+    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    allowedLocations: v.array(v.string()), // ["latrobe", "everson", "chestnut"] or ["all"]
+    isActive: v.boolean(),
+    createdAt: v.number(),
+    lastLoginAt: v.optional(v.number()),
+  }).index("by_email", ["email"]),
+
   locations: defineTable({
     base44Id: v.string(),
     name: v.string(),
@@ -21,21 +34,21 @@ export default defineSchema({
     isActive: v.boolean(),
   }).index("by_code", ["code"]),
 
- trucks: defineTable({
-  base44Id: v.optional(v.string()),
-  truckNumber: v.string(),
-  carrier: v.string(),
-  status: v.string(),
-  locationId: v.string(),
-  openedBy: v.id("users"),
-  openedAt: v.number(),
-  closedAt: v.optional(v.number()),
-  closedBy: v.optional(v.id("users")),
-  securityTag: v.optional(v.string()),
-  syncedToBase44: v.optional(v.boolean()),
-  scanCount: v.optional(v.number()),
-}).index("by_location_status", ["locationId", "status"])
-  .index("by_base44Id", ["base44Id"]),
+  trucks: defineTable({
+    base44Id: v.optional(v.string()),
+    truckNumber: v.string(),
+    carrier: v.string(),
+    status: v.string(),
+    locationId: v.string(),
+    openedBy: v.id("users"),
+    openedAt: v.number(),
+    closedAt: v.optional(v.number()),
+    closedBy: v.optional(v.id("users")),
+    securityTag: v.optional(v.string()),
+    syncedToBase44: v.optional(v.boolean()),
+    scanCount: v.optional(v.number()),
+  }).index("by_location_status", ["locationId", "status"])
+    .index("by_base44Id", ["base44Id"]),
 
   scans: defineTable({
     truckId: v.id("trucks"),

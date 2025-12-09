@@ -383,3 +383,48 @@ export const analyzeVendorAccounts = mutation({
     return sorted;
   },
 });
+export const deleteTruck = mutation({
+  args: { truckId: v.id("trucks") },
+  handler: async (ctx, args) => {
+    // Delete all scans for this truck first
+    const scans = await ctx.db
+      .query("scans")
+      .withIndex("by_truck", (q) => q.eq("truckId", args.truckId))
+      .collect();
+    
+    for (const scan of scans) {
+      await ctx.db.delete(scan._id);
+    }
+    
+    // Delete the truck
+    await ctx.db.delete(args.truckId);
+    
+    return { deleted: true, scansRemoved: scans.length };
+  },
+});
+
+export const updateUser = mutation({
+  args: {
+    userId: v.id("users"),
+    name: v.optional(v.string()),
+    pin: v.optional(v.string()),
+    isActive: v.optional(v.boolean()),
+    role: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { userId, ...updates } = args;
+    const filteredUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([_, v]) => v !== undefined)
+    );
+    await ctx.db.patch(userId, filteredUpdates);
+    return { success: true };
+  },
+});
+
+export const deleteUser = mutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.userId);
+    return { success: true };
+  },
+});
