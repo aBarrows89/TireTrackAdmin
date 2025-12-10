@@ -5,8 +5,289 @@ import { api } from "../../convex/_generated/api";
 import React, { useState, useMemo } from "react";
 import { Protected } from "../protected";
 import Link from "next/link";
+import { Id } from "../../convex/_generated/dataModel";
 
 type ReportType = "daily" | "vendor-range";
+
+// Unmatched Scans Modal Component
+function UnmatchedScansModal({
+  onClose,
+  data,
+}: {
+  onClose: () => void;
+  data: any;
+}) {
+  const [filter, setFilter] = useState<"all" | "UPS" | "FedEx unmapped" | "Other">("all");
+  const markAsMiscan = useMutation(api.mutations.markScanAsMiscan);
+  const [marking, setMarking] = useState<string | null>(null);
+
+  const handleMarkMiscan = async (scanId: Id<"scans">, isMiscan: boolean) => {
+    setMarking(scanId);
+    await markAsMiscan({ scanId, isMiscan });
+    setMarking(null);
+  };
+
+  const generateCSV = () => {
+    if (!data?.scans) return;
+    const scans = filter === "all" ? data.scans : data.scans.filter((s: any) => s.category === filter);
+    const headers = ["Tracking Number", "Category", "Truck", "Scanned By", "Emp ID", "Date", "Raw Barcode", "Is Miscan"];
+    const rows = scans.map((s: any) => [
+      s.trackingNumber,
+      s.category,
+      s.truckNumber,
+      s.scannedByName,
+      s.scannedByEmpId,
+      new Date(s.scannedAt).toLocaleString(),
+      s.rawBarcode.replace(/[\x00-\x1F]/g, " "),
+      s.isMiscan ? "Yes" : "No",
+    ]);
+    const csv = [headers.join(","), ...rows.map((r: string[]) => r.map(v => `"${v}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `unmatched_scans_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const filteredScans = data?.scans
+    ? filter === "all"
+      ? data.scans
+      : data.scans.filter((s: any) => s.category === filter)
+    : [];
+
+  // Calculate max for chart scaling
+  const maxUnmatched = data?.dailyData?.length
+    ? Math.max(...data.dailyData.map((d: any) => d.unmatched), 1)
+    : 1;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+          <div>
+            <h2 className="text-xl font-bold text-white">Unmatched Scans Report</h2>
+            <p className="text-slate-500 text-sm">{data?.scans?.length || 0} total unmatched scans</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={generateCSV}
+              className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download CSV
+            </button>
+            <button
+              onClick={onClose}
+              className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center transition-colors"
+            >
+              <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-6">
+          {!data ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-10 h-10 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* 30-Day Chart */}
+              {data.dailyData && data.dailyData.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-slate-400 mb-3">Unmatched Scans - Last 30 Days</h3>
+                  <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                    <div className="flex items-end gap-1 h-32">
+                      {data.dailyData.map((day: any, i: number) => {
+                        // Use percentage of unmatched relative to total for that day
+                        const unmatchedPercent = day.total > 0 ? (day.unmatched / day.total) * 100 : 0;
+                        // Scale so even small percentages show up
+                        const height = Math.max(unmatchedPercent * 2, day.unmatched > 0 ? 8 : 2);
+                        const matchRate = day.matchRate.toFixed(1);
+                        return (
+                          <div
+                            key={day.date}
+                            className="flex-1 flex flex-col items-center justify-end group relative h-full"
+                          >
+                            <div
+                              className={`w-full rounded-t transition-all cursor-pointer ${
+                                day.unmatched > 0 ? "bg-red-500 hover:bg-red-400" : "bg-emerald-500/50"
+                              }`}
+                              style={{ height: `${height}%`, minHeight: day.total > 0 ? '4px' : '2px' }}
+                            />
+                            {/* Tooltip - positioned below bar if near top, above otherwise */}
+                            <div className={`absolute left-1/2 -translate-x-1/2 hidden group-hover:block bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs z-10 whitespace-nowrap shadow-xl ${
+                              height > 60 ? "top-full mt-2" : "bottom-full mb-2"
+                            }`}>
+                              <p className="text-white font-medium">{new Date(day.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</p>
+                              <p className="text-slate-400">{day.total} scans, {day.unmatched} unmatched</p>
+                              <p className={day.matchRate >= 99 ? "text-emerald-400" : day.matchRate >= 95 ? "text-yellow-400" : "text-red-400"}>
+                                {matchRate}% matched
+                              </p>
+                              {day.miscan > 0 && <p className="text-amber-400">{day.miscan} marked as miscan</p>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between mt-2 text-xs text-slate-500">
+                      <span>{data.dailyData[0]?.date ? new Date(data.dailyData[0].date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}</span>
+                      <span>{data.dailyData[data.dailyData.length - 1]?.date ? new Date(data.dailyData[data.dailyData.length - 1].date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}</span>
+                    </div>
+                    <div className="flex items-center justify-center gap-4 mt-3 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded bg-red-500" />
+                        <span className="text-slate-400">Has unmatched</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded bg-emerald-500/50" />
+                        <span className="text-slate-400">All matched</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Miscan Training Summary */}
+              {data.scans?.some((s: any) => s.isMiscan) && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-slate-400 mb-3">Miscan Training Report</h3>
+                  <div className="bg-amber-500/10 rounded-xl p-4 border border-amber-500/30">
+                    <p className="text-amber-400 text-sm mb-3">
+                      Employees with marked miscans - consider for training:
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {(() => {
+                        // Group miscans by employee
+                        const byEmployee: Record<string, { name: string; empId: string; count: number }> = {};
+                        for (const scan of data.scans.filter((s: any) => s.isMiscan)) {
+                          const key = scan.scannedByEmpId || "unknown";
+                          if (!byEmployee[key]) {
+                            byEmployee[key] = { name: scan.scannedByName, empId: scan.scannedByEmpId, count: 0 };
+                          }
+                          byEmployee[key].count++;
+                        }
+                        return Object.values(byEmployee)
+                          .sort((a, b) => b.count - a.count)
+                          .map((emp) => (
+                            <div key={emp.empId} className="flex items-center gap-2 px-3 py-2 bg-slate-800/80 rounded-lg border border-slate-700/50">
+                              <span className="text-amber-400 font-bold text-lg">{emp.count}</span>
+                              <div>
+                                <p className="text-slate-200 text-sm font-medium">{emp.name}</p>
+                                <p className="text-slate-500 text-xs">{emp.empId}</p>
+                              </div>
+                            </div>
+                          ));
+                      })()}
+                    </div>
+                    <p className="text-slate-500 text-xs mt-3">
+                      Total miscans: {data.scans.filter((s: any) => s.isMiscan).length} |
+                      Use this data to identify scanning training opportunities
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-2 mb-4">
+                {(["all", "UPS", "FedEx unmapped", "Other"] as const).map((f) => {
+                  const count = f === "all"
+                    ? data.scans?.length || 0
+                    : data.scans?.filter((s: any) => s.category === f).length || 0;
+                  return (
+                    <button
+                      key={f}
+                      onClick={() => setFilter(f)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                        filter === f
+                          ? "bg-cyan-600 text-white"
+                          : "bg-slate-800 text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      {f === "all" ? "All" : f} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Scans Table */}
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-900">
+                      <tr className="text-slate-500 text-xs">
+                        <th className="text-left py-3 px-4">Tracking</th>
+                        <th className="text-left py-3 px-4">Category</th>
+                        <th className="text-left py-3 px-4">Truck</th>
+                        <th className="text-left py-3 px-4">Scanned By</th>
+                        <th className="text-left py-3 px-4">Date</th>
+                        <th className="text-left py-3 px-4">Raw Barcode</th>
+                        <th className="text-center py-3 px-4">Miscan</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {filteredScans.slice(0, 200).map((scan: any) => (
+                        <tr key={scan._id} className={`hover:bg-slate-800/50 ${scan.isMiscan ? "bg-amber-500/10" : ""}`}>
+                          <td className="py-3 px-4 font-mono text-xs text-slate-300">{scan.trackingNumber}</td>
+                          <td className="py-3 px-4">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              scan.category === "UPS" ? "bg-yellow-500/20 text-yellow-400" :
+                              scan.category === "FedEx unmapped" ? "bg-orange-500/20 text-orange-400" :
+                              "bg-red-500/20 text-red-400"
+                            }`}>
+                              {scan.category}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-slate-400">{scan.truckNumber}</td>
+                          <td className="py-3 px-4">
+                            <div>
+                              <p className="text-slate-300">{scan.scannedByName}</p>
+                              <p className="text-slate-500 text-xs">{scan.scannedByEmpId}</p>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-slate-500 text-xs">{new Date(scan.scannedAt).toLocaleDateString()}</td>
+                          <td className="py-3 px-4 font-mono text-xs text-slate-500 max-w-[200px] truncate" title={scan.rawBarcode}>
+                            {scan.rawBarcode.replace(/[\x00-\x1F]/g, " ").slice(0, 50)}...
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              onClick={() => handleMarkMiscan(scan._id, !scan.isMiscan)}
+                              disabled={marking === scan._id}
+                              className={`px-3 py-1 rounded text-xs font-medium transition-all ${
+                                scan.isMiscan
+                                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                                  : "bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white"
+                              }`}
+                            >
+                              {marking === scan._id ? "..." : scan.isMiscan ? "Miscan" : "Mark"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {filteredScans.length > 200 && (
+                    <p className="text-center text-slate-500 text-xs py-3">
+                      Showing 200 of {filteredScans.length} scans. Download CSV for full list.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ReportsPage() {
   const [reportType, setReportType] = useState<ReportType>("daily");
@@ -26,6 +307,7 @@ function ReportsPage() {
   const [selectedVendor, setSelectedVendor] = useState<string>("all");
   const [expandedTruck, setExpandedTruck] = useState<string | null>(null);
   const [expandedVendor, setExpandedVendor] = useState<string | null>(null);
+  const [showUnmatchedModal, setShowUnmatchedModal] = useState(false);
 
   // Daily report dates
   const { startDate, endDate } = useMemo(() => {
@@ -49,6 +331,11 @@ function ReportsPage() {
     reportType === "vendor-range" ? { startDate: rangeStart, endDate: rangeEnd, vendor: selectedVendor === "all" ? undefined : selectedVendor } : "skip"
   );
   const allVendors = useQuery(api.queries.getAllVendors);
+  const matchedStats = useQuery(api.queries.getMatchedScanStats, { startDate, endDate });
+  const unmatchedScans = useQuery(
+    api.queries.getUnmatchedScansReport,
+    showUnmatchedModal ? {} : "skip"
+  );
 
   const autoCloseAll = useMutation(api.mutations.autoCloseAllTrucks);
   const adminCloseTruck = useMutation(api.mutations.adminCloseTruck);
@@ -310,6 +597,40 @@ function ReportsPage() {
                 </div>
               </div>
             </div>
+
+            {/* Matched Scans Stats - subtle display with breakdown */}
+            {matchedStats && (
+              <div className="flex flex-wrap items-center gap-4 mb-6 text-xs text-slate-500">
+                <span>
+                  Vendor Match Rate:{" "}
+                  {matchedStats.daily.total > 0 ? (
+                    <span className="text-slate-400">
+                      {((matchedStats.daily.matched / matchedStats.daily.total) * 100).toFixed(2)}% selected ({matchedStats.daily.matched}/{matchedStats.daily.total})
+                    </span>
+                  ) : (
+                    <span className="text-slate-600">no scans for date</span>
+                  )}
+                  <span className="text-slate-600 mx-1">|</span>
+                  <span className="text-slate-400">
+                    {matchedStats.overall.total > 0
+                      ? ((matchedStats.overall.matched / matchedStats.overall.total) * 100).toFixed(2)
+                      : "0.00"}% overall ({matchedStats.overall.matched.toLocaleString()}/{matchedStats.overall.total.toLocaleString()})
+                  </span>
+                </span>
+                {matchedStats.overall.unmatchedBreakdown && matchedStats.overall.unmatchedBreakdown.total > 0 && (
+                  <button
+                    onClick={() => setShowUnmatchedModal(true)}
+                    className="text-slate-600 hover:text-slate-400 transition-colors underline decoration-dotted underline-offset-2"
+                  >
+                    (Unmatched: {matchedStats.overall.unmatchedBreakdown.ups > 0 && <span className="text-yellow-500/70">{matchedStats.overall.unmatchedBreakdown.ups} UPS</span>}
+                    {matchedStats.overall.unmatchedBreakdown.ups > 0 && matchedStats.overall.unmatchedBreakdown.fedexUnmapped > 0 && ", "}
+                    {matchedStats.overall.unmatchedBreakdown.fedexUnmapped > 0 && <span className="text-orange-500/70">{matchedStats.overall.unmatchedBreakdown.fedexUnmapped} FedEx unmapped</span>}
+                    {(matchedStats.overall.unmatchedBreakdown.ups > 0 || matchedStats.overall.unmatchedBreakdown.fedexUnmapped > 0) && matchedStats.overall.unmatchedBreakdown.other > 0 && ", "}
+                    {matchedStats.overall.unmatchedBreakdown.other > 0 && <span className="text-red-500/70">{matchedStats.overall.unmatchedBreakdown.other} other</span>})
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Trucks Table */}
             <div className="bg-slate-800/30 backdrop-blur border border-slate-700/30 rounded-2xl overflow-hidden shadow-xl">
@@ -662,6 +983,14 @@ function ReportsPage() {
           <p>Trucks auto-close at midnight EST daily</p>
         </div>
       </div>
+
+      {/* Unmatched Scans Modal */}
+      {showUnmatchedModal && (
+        <UnmatchedScansModal
+          onClose={() => setShowUnmatchedModal(false)}
+          data={unmatchedScans}
+        />
+      )}
     </main>
   );
 }

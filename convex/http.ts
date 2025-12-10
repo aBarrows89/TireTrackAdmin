@@ -231,4 +231,62 @@ http.route({
   }),
 });
 
+// Migration endpoint to detect FedEx miscans
+http.route({
+  path: "/api/migrate/detect-miscans",
+  method: "POST",
+  handler: httpAction(async (ctx) => {
+    try {
+      const scans = await ctx.runQuery(api.queries.getAllScans);
+      let updated = 0;
+      let detected = 0;
+
+      for (const scan of scans) {
+        if (scan.isMiscan === true) continue;
+
+        const raw = scan.rawBarcode || "";
+        const trackingNumber = scan.trackingNumber || "";
+        const carrier = scan.carrier || "";
+
+        // Check if this looks like a FedEx tracking number
+        const isFedExTracking =
+          /^\d{12,22}$/.test(trackingNumber) ||
+          /^(DT|61|96|79|92|93|94)\d+$/.test(trackingNumber) ||
+          carrier?.toLowerCase().includes("fedex");
+
+        // Check if the raw barcode has 2D format markers
+        const has2DFormat =
+          raw.includes("[)>") ||
+          raw.includes("FDEG") ||
+          raw.includes("\x1d") ||
+          raw.includes("\x1e");
+
+        // If it's a FedEx tracking number but doesn't have 2D format, it's a miscan
+        if (isFedExTracking && !has2DFormat) {
+          await ctx.runMutation(api.mutations.markScanAsMiscan, {
+            scanId: scan._id,
+            isMiscan: true,
+          });
+          detected++;
+          updated++;
+        }
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        totalScans: scans.length,
+        miscansDetected: detected,
+        updated
+      }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error: any) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }),
+});
+
 export default http;

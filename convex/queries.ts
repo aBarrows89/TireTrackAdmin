@@ -682,6 +682,141 @@ export const getAllVendors = query({
   },
 });
 
+// Get matched scan stats - daily and overall totals with breakdown
+export const getMatchedScanStats = query({
+  args: {
+    startDate: v.optional(v.number()),
+    endDate: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const allScans = await ctx.db.query("scans").collect();
+
+    // Helper to categorize unmatched scans
+    const categorizeUnmatched = (scans: typeof allScans) => {
+      const unmatched = scans.filter(s => !s.vendor || s.vendor === "Unknown");
+      let ups = 0;
+      let fedexUnmapped = 0;
+      let other = 0;
+
+      for (const scan of unmatched) {
+        const raw = scan.rawBarcode || "";
+        const isUPS = raw.includes("UPSN") || raw.startsWith("1Z");
+        const isFedEx = raw.includes("FDEG") || raw.includes("[)>");
+
+        if (isUPS) ups++;
+        else if (isFedEx) fedexUnmapped++;
+        else other++;
+      }
+
+      return { ups, fedexUnmapped, other, total: unmatched.length };
+    };
+
+    // Overall stats
+    const overallTotal = allScans.length;
+    const overallMatched = allScans.filter(s => s.vendor && s.vendor !== "Unknown").length;
+    const overallUnmatchedBreakdown = categorizeUnmatched(allScans);
+
+    // Daily stats (if date range provided)
+    let dailyTotal = 0;
+    let dailyMatched = 0;
+    let dailyUnmatchedBreakdown = { ups: 0, fedexUnmapped: 0, other: 0, total: 0 };
+
+    if (args.startDate !== undefined && args.endDate !== undefined) {
+      const dailyScans = allScans.filter(s =>
+        s.scannedAt >= args.startDate! && s.scannedAt <= args.endDate!
+      );
+      dailyTotal = dailyScans.length;
+      dailyMatched = dailyScans.filter(s => s.vendor && s.vendor !== "Unknown").length;
+      dailyUnmatchedBreakdown = categorizeUnmatched(dailyScans);
+    }
+
+    return {
+      overall: {
+        total: overallTotal,
+        matched: overallMatched,
+        unmatchedBreakdown: overallUnmatchedBreakdown,
+      },
+      daily: {
+        total: dailyTotal,
+        matched: dailyMatched,
+        unmatchedBreakdown: dailyUnmatchedBreakdown,
+      },
+    };
+  },
+});
+
+// Get all unmatched scans with details for report
+export const getUnmatchedScansReport = query({
+  args: {},
+  handler: async (ctx) => {
+    const allScans = await ctx.db.query("scans").collect();
+    const unmatched = allScans.filter(s => !s.vendor || s.vendor === "Unknown");
+
+    // Get truck and user info for each scan
+    const enriched = await Promise.all(
+      unmatched.map(async (scan) => {
+        const truck = await ctx.db.get(scan.truckId);
+        const user = await ctx.db.get(scan.scannedBy);
+        const raw = scan.rawBarcode || "";
+        const isUPS = raw.includes("UPSN") || raw.startsWith("1Z");
+        const isFedEx = raw.includes("FDEG") || raw.includes("[)>");
+        const category = isUPS ? "UPS" : isFedEx ? "FedEx unmapped" : "Other";
+
+        return {
+          _id: scan._id,
+          trackingNumber: scan.trackingNumber,
+          carrier: scan.carrier || "",
+          rawBarcode: scan.rawBarcode || "",
+          category,
+          truckNumber: truck?.truckNumber || "Unknown",
+          scannedAt: scan.scannedAt,
+          recipientName: scan.recipientName || "",
+          destination: scan.destination || "",
+          scannedByName: user?.name || "Unknown",
+          scannedByEmpId: user?.empId || "",
+          isMiscan: scan.isMiscan || false,
+        };
+      })
+    );
+
+    // Calculate daily breakdown for last 30 days
+    const now = Date.now();
+    const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+    const dailyBreakdown: Record<string, { total: number; unmatched: number; miscan: number }> = {};
+
+    // Get all scans for last 30 days
+    const recentScans = allScans.filter(s => s.scannedAt >= thirtyDaysAgo);
+
+    for (const scan of recentScans) {
+      const date = new Date(scan.scannedAt).toISOString().split('T')[0];
+      if (!dailyBreakdown[date]) {
+        dailyBreakdown[date] = { total: 0, unmatched: 0, miscan: 0 };
+      }
+      dailyBreakdown[date].total++;
+      if (!scan.vendor || scan.vendor === "Unknown") {
+        dailyBreakdown[date].unmatched++;
+        if (scan.isMiscan) {
+          dailyBreakdown[date].miscan++;
+        }
+      }
+    }
+
+    // Convert to sorted array
+    const dailyData = Object.entries(dailyBreakdown)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, data]) => ({
+        date,
+        ...data,
+        matchRate: data.total > 0 ? ((data.total - data.unmatched) / data.total * 100) : 100,
+      }));
+
+    return {
+      scans: enriched.sort((a, b) => b.scannedAt - a.scannedAt),
+      dailyData,
+    };
+  },
+});
+
 // Debug query to check return item image URLs
 export const debugReturnItemImages = query({
   args: {},
@@ -723,5 +858,75 @@ export const debugReturnItemImages = query({
       itemsWithResolvedUrl: results.filter(r => r.resolvedUrl).length,
       items: results,
     };
+  },
+});
+
+// Get "No Vendor Known" scans grouped by potential account number
+// Helps identify patterns that suggest a new vendor to research
+export const getNoVendorKnownReport = query({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+
+    // Filter to noVendorKnown scans
+    const noVendorScans = scans.filter(s => s.noVendorKnown === true);
+
+    // Group by potential account number
+    const byAccountNumber: Record<string, {
+      count: number;
+      scans: typeof noVendorScans;
+    }> = {};
+
+    let noAccountNumber = 0;
+
+    for (const scan of noVendorScans) {
+      const accountNum = scan.potentialAccountNumber || "no_account";
+      if (accountNum === "no_account") {
+        noAccountNumber++;
+      }
+      if (!byAccountNumber[accountNum]) {
+        byAccountNumber[accountNum] = { count: 0, scans: [] };
+      }
+      byAccountNumber[accountNum].count++;
+      byAccountNumber[accountNum].scans.push(scan);
+    }
+
+    // Convert to array and sort by count (highest first)
+    const grouped = Object.entries(byAccountNumber)
+      .filter(([key]) => key !== "no_account") // Exclude scans without account numbers
+      .map(([accountNumber, data]) => ({
+        accountNumber,
+        count: data.count,
+        // Include sample scan info for context
+        sampleScans: data.scans.slice(0, 5).map(s => ({
+          _id: s._id,
+          trackingNumber: s.trackingNumber,
+          destination: s.destination,
+          scannedAt: s.scannedAt,
+          rawBarcode: s.rawBarcode,
+        })),
+        // Flag if this looks like a potential new vendor (7+ occurrences)
+        likelyNewVendor: data.count >= 7,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      totalNoVendorKnown: noVendorScans.length,
+      noAccountNumber,
+      groupedByAccount: grouped,
+      // Highlight accounts with 7+ occurrences
+      potentialNewVendors: grouped.filter(g => g.likelyNewVendor),
+      // One-off vendors (single occurrence)
+      oneOffVendors: grouped.filter(g => g.count === 1).length,
+    };
+  },
+});
+
+// Get count of noVendorKnown scans
+export const getNoVendorKnownCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+    return scans.filter(s => s.noVendorKnown === true).length;
   },
 });

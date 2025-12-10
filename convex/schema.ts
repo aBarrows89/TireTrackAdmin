@@ -67,6 +67,9 @@ export default defineSchema({
     scanType: v.optional(v.string()),
     vendor: v.optional(v.string()),
     vendorAccount: v.optional(v.string()),
+    isMiscan: v.optional(v.boolean()),
+    noVendorKnown: v.optional(v.boolean()),
+    potentialAccountNumber: v.optional(v.string()), // Extracted account number for pattern matching
   }).index("by_truck", ["truckId"])
     .index("by_vendor", ["vendor"]),
 

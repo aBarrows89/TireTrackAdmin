@@ -66,6 +66,55 @@ export const openTruck = mutation({
   },
 });
 
+// Helper to detect FedEx miscans (scanned 1D barcode instead of 2D)
+function detectFedExMiscan(trackingNumber: string, rawBarcode: string, carrier?: string): boolean {
+  // FedEx tracking numbers typically:
+  // - Ground/Home: 12-22 digits, often starting with specific patterns
+  // - Express: 12 digits
+  // - SmartPost: 22 digits (often starts with 92, 93, 94)
+
+  const isFedExTracking =
+    /^\d{12,22}$/.test(trackingNumber) || // Pure numeric FedEx tracking
+    /^(DT|61|96|79|92|93|94)\d+$/.test(trackingNumber) || // FedEx patterns
+    (carrier?.toLowerCase().includes("fedex") ?? false);
+
+  // Check if the rawBarcode has proper 2D FedEx format (contains delimiters and account info)
+  const has2DFormat =
+    rawBarcode.includes("[)>") || // GS1-128 format header
+    rawBarcode.includes("FDEG") || // FedEx Ground marker
+    rawBarcode.includes("\x1d") || // GS (Group Separator) character - indicates 2D
+    rawBarcode.includes("\x1e"); // RS (Record Separator) character
+
+  // If it looks like FedEx but doesn't have 2D format = miscan (they scanned wrong barcode)
+  return Boolean(isFedExTracking && !has2DFormat);
+}
+
+// Helper to check if barcode has valid 2D format (not a miscan)
+function hasValid2DFormat(rawBarcode: string): boolean {
+  return (
+    rawBarcode.includes("[)>") || // GS1-128 format header
+    rawBarcode.includes("FDEG") || // FedEx Ground marker
+    rawBarcode.includes("\x1d") || // GS (Group Separator) character
+    rawBarcode.includes("\x1e") // RS (Record Separator) character
+  );
+}
+
+// Helper to extract potential account number from rawBarcode for pattern grouping
+function extractPotentialAccountNumber(rawBarcode: string): string | undefined {
+  // Look for 7-9 digit numbers in the barcode that could be vendor account numbers
+  const matches = rawBarcode.match(/\d{7,9}/g);
+  if (!matches || matches.length === 0) return undefined;
+
+  // Return the first match that isn't the tracking number (typically longer)
+  // Account numbers are usually shorter than tracking numbers
+  for (const match of matches) {
+    // Skip if it looks like a tracking number (12+ digits would be caught by the match anyway)
+    // Return the first 7-9 digit number found
+    return match;
+  }
+  return undefined;
+}
+
 export const addScan = mutation({
   args: {
     truckId: v.id("trucks"),
@@ -84,7 +133,7 @@ export const addScan = mutation({
     let vendor = "Unknown";
     let vendorAccount = "";
     const raw = args.rawBarcode || "";
-    
+
     for (const va of VENDOR_ACCOUNTS) {
       if (raw.includes(va.account)) {
         vendor = va.vendor;
@@ -92,6 +141,18 @@ export const addScan = mutation({
         break;
       }
     }
+
+    // Auto-detect FedEx miscans (scanned 1D instead of 2D barcode)
+    const isMiscan = detectFedExMiscan(args.trackingNumber, raw, args.carrier);
+
+    // Detect "No Vendor Known" - valid 2D scan but no vendor match
+    // Only mark as noVendorKnown if it's NOT a miscan (valid 2D format) and vendor is still Unknown
+    const isValid2D = hasValid2DFormat(raw);
+    const noVendorKnown = !isMiscan && isValid2D && vendor === "Unknown";
+
+    // Extract potential account number for pattern grouping (only if noVendorKnown)
+    const potentialAccountNumber = noVendorKnown ? extractPotentialAccountNumber(raw) : undefined;
+
     const scanId = await ctx.db.insert("scans", {
       truckId: args.truckId,
       trackingNumber: args.trackingNumber,
@@ -107,6 +168,9 @@ export const addScan = mutation({
       scanType: args.scanType || "auto",
       vendor,
       vendorAccount,
+      isMiscan,
+      noVendorKnown,
+      potentialAccountNumber,
     });
     const truck = await ctx.db.get(args.truckId);
     if (truck) {
@@ -339,14 +403,22 @@ export const bulkInsertTireUPCs = mutation({
 });
 
 export const backfillVendors = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    detectMiscans: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
     const scans = await ctx.db.query("scans").collect();
     let updated = 0;
+    let miscansDetected = 0;
     for (const scan of scans) {
       const raw = scan.rawBarcode || "";
+      const trackingNumber = scan.trackingNumber || "";
+      const carrier = scan.carrier || "";
       let vendor = "Unknown";
       let vendorAccount = "";
+      let shouldUpdate = false;
+
+      // Match vendor accounts
       for (const va of VENDOR_ACCOUNTS) {
         if (raw.includes(va.account)) {
           vendor = va.vendor;
@@ -354,12 +426,40 @@ export const backfillVendors = mutation({
           break;
         }
       }
-      if (vendor !== "Unknown") {
-        await ctx.db.patch(scan._id, { vendor, vendorAccount });
+      if (vendor !== "Unknown" && scan.vendor !== vendor) {
+        shouldUpdate = true;
+      }
+
+      // Detect FedEx miscans if requested
+      let isMiscan = scan.isMiscan;
+      if (args.detectMiscans && !scan.isMiscan) {
+        const isFedExTracking =
+          /^\d{12,22}$/.test(trackingNumber) ||
+          /^(DT|61|96|79|92|93|94)\d+$/.test(trackingNumber) ||
+          (carrier?.toLowerCase().includes("fedex") ?? false);
+
+        const has2DFormat =
+          raw.includes("[)>") ||
+          raw.includes("FDEG") ||
+          raw.includes("\x1d") ||
+          raw.includes("\x1e");
+
+        if (isFedExTracking && !has2DFormat) {
+          isMiscan = true;
+          miscansDetected++;
+          shouldUpdate = true;
+        }
+      }
+
+      if (shouldUpdate) {
+        await ctx.db.patch(scan._id, {
+          ...(vendor !== "Unknown" && { vendor, vendorAccount }),
+          ...(isMiscan !== undefined && { isMiscan }),
+        });
         updated++;
       }
     }
-    return { updated, total: scans.length };
+    return { updated, total: scans.length, miscansDetected };
   },
 });
 
@@ -410,6 +510,8 @@ export const updateUser = mutation({
     pin: v.optional(v.string()),
     isActive: v.optional(v.boolean()),
     role: v.optional(v.string()),
+    locationId: v.optional(v.string()),
+    locationName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { userId, ...updates } = args;
@@ -685,5 +787,133 @@ export const normalizeTruckLocations = mutation({
     }
 
     return { success: true, updated, total: trucks.length };
+  },
+});
+
+// Mark a scan as miscan
+export const markScanAsMiscan = mutation({
+  args: {
+    scanId: v.id("scans"),
+    isMiscan: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.scanId, { isMiscan: args.isMiscan });
+    return { success: true };
+  },
+});
+
+// Mark a scan as "No Vendor Known"
+export const markScanAsNoVendorKnown = mutation({
+  args: {
+    scanId: v.id("scans"),
+    noVendorKnown: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    // If marking as noVendorKnown, extract potential account number
+    if (args.noVendorKnown) {
+      const scan = await ctx.db.get(args.scanId);
+      if (scan) {
+        const potentialAccountNumber = extractPotentialAccountNumber(scan.rawBarcode || "");
+        await ctx.db.patch(args.scanId, {
+          noVendorKnown: true,
+          potentialAccountNumber,
+        });
+      }
+    } else {
+      await ctx.db.patch(args.scanId, {
+        noVendorKnown: false,
+        potentialAccountNumber: undefined,
+      });
+    }
+    return { success: true };
+  },
+});
+
+// Backfill noVendorKnown for existing scans
+export const backfillNoVendorKnown = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+    let updated = 0;
+    let detected = 0;
+
+    for (const scan of scans) {
+      // Skip if already marked or if it's a miscan
+      if (scan.noVendorKnown === true || scan.isMiscan === true) continue;
+
+      const raw = scan.rawBarcode || "";
+      const vendor = scan.vendor || "Unknown";
+
+      // Check if this has valid 2D format
+      const has2DFormat =
+        raw.includes("[)>") ||
+        raw.includes("FDEG") ||
+        raw.includes("\x1d") ||
+        raw.includes("\x1e");
+
+      // If valid 2D but vendor is Unknown, mark as noVendorKnown
+      if (has2DFormat && vendor === "Unknown") {
+        const potentialAccountNumber = extractPotentialAccountNumber(raw);
+        await ctx.db.patch(scan._id, {
+          noVendorKnown: true,
+          potentialAccountNumber,
+        });
+        detected++;
+        updated++;
+      }
+    }
+
+    return {
+      success: true,
+      total: scans.length,
+      detected,
+      updated,
+    };
+  },
+});
+
+// Backfill auto-detect miscans for existing FedEx scans
+export const backfillFedExMiscans = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+    let updated = 0;
+    let detected = 0;
+
+    for (const scan of scans) {
+      // Skip if already marked as miscan manually
+      if (scan.isMiscan === true) continue;
+
+      const raw = scan.rawBarcode || "";
+      const trackingNumber = scan.trackingNumber || "";
+      const carrier = scan.carrier || "";
+
+      // Check if this is a FedEx miscan
+      const isFedExTracking =
+        /^\d{12,22}$/.test(trackingNumber) ||
+        /^(DT|61|96|79|92|93|94)\d+$/.test(trackingNumber) ||
+        carrier.toLowerCase().includes("fedex");
+
+      const has2DFormat =
+        raw.includes("[)>") ||
+        raw.includes("FDEG") ||
+        raw.includes("\x1d") ||
+        raw.includes("\x1e");
+
+      const shouldBeMiscan = isFedExTracking && !has2DFormat;
+
+      if (shouldBeMiscan && !scan.isMiscan) {
+        await ctx.db.patch(scan._id, { isMiscan: true });
+        updated++;
+        detected++;
+      }
+    }
+
+    return {
+      success: true,
+      total: scans.length,
+      detected,
+      updated,
+    };
   },
 });
