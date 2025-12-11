@@ -54,6 +54,8 @@ function Dashboard() {
   const [newAdmin, setNewAdmin] = useState({ email: "", password: "", name: "", role: "admin" as "admin" | "viewer", locations: ["all"] });
   const [newUser, setNewUser] = useState({ empId: "", name: "", pin: "", locationId: "", locationName: "", role: "user" });
   const [newUserError, setNewUserError] = useState("");
+  const [editingAdmin, setEditingAdmin] = useState<{ id: string; email: string; name: string; role: "superadmin" | "admin" | "viewer" } | null>(null);
+  const [editAdminError, setEditAdminError] = useState("");
 
   const getTodayMidnightEST = () => {
     const now = new Date();
@@ -616,6 +618,15 @@ function Dashboard() {
                         <td className="px-5 py-4">
                           <div className="flex items-center justify-end gap-1">
                             <button
+                              onClick={() => setEditingAdmin({ id: a.id, email: a.email, name: a.name, role: a.role })}
+                              className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+                              title="Edit"
+                            >
+                              <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                            <button
                               onClick={() => updateAdmin({ adminId: a.id as any, isActive: !a.isActive })}
                               className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
                               title={a.isActive ? "Deactivate" : "Activate"}
@@ -1100,6 +1111,40 @@ function Dashboard() {
               <h3 className="text-lg font-semibold mb-2">Delete User?</h3>
               <p className="text-slate-400 text-sm mb-6">Consider deactivating instead of deleting.</p>
               <div className="flex gap-3"><button onClick={() => setUserDeleteConfirm(null)} className="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors">Cancel</button><button onClick={() => handleDeleteUser(userDeleteConfirm)} className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-medium transition-colors">Delete</button></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingAdmin && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => { setEditingAdmin(null); setEditAdminError(""); }}>
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Edit Admin</h3>
+              <button onClick={() => { setEditingAdmin(null); setEditAdminError(""); }} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              {editAdminError && (<div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">{editAdminError}</div>)}
+              <div><label className="block text-slate-400 text-sm mb-2">Name</label><input type="text" value={editingAdmin.name} onChange={(e) => setEditingAdmin({ ...editingAdmin, name: e.target.value })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all" /></div>
+              <div><label className="block text-slate-400 text-sm mb-2">Email</label><input type="email" value={editingAdmin.email} onChange={(e) => setEditingAdmin({ ...editingAdmin, email: e.target.value })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all" /></div>
+              <div><label className="block text-slate-400 text-sm mb-2">Role</label><select value={editingAdmin.role} onChange={(e) => setEditingAdmin({ ...editingAdmin, role: e.target.value as "superadmin" | "admin" | "viewer" })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all"><option value="superadmin">Superadmin</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select></div>
+              <div className="flex gap-3 pt-2"><button onClick={() => { setEditingAdmin(null); setEditAdminError(""); }} className="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors">Cancel</button><button onClick={async () => {
+                if (!editingAdmin.name.trim() || !editingAdmin.email.trim()) {
+                  setEditAdminError("Name and email are required");
+                  return;
+                }
+                const result = await updateAdmin({ adminId: editingAdmin.id as any, name: editingAdmin.name, email: editingAdmin.email, role: editingAdmin.role });
+                if (result.success) {
+                  setEditingAdmin(null);
+                  setEditAdminError("");
+                } else {
+                  setEditAdminError(result.error || "Failed to update admin");
+                }
+              }} className="flex-1 px-4 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-xl font-medium shadow-lg shadow-cyan-500/20 transition-all">Save</button></div>
             </div>
           </div>
         </div>

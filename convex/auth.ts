@@ -138,15 +138,32 @@ export const createAdmin = mutation({
 export const updateAdmin = mutation({
   args: {
     adminId: v.id("adminUsers"),
+    email: v.optional(v.string()),
     name: v.optional(v.string()),
     role: v.optional(v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer"))),
     allowedLocations: v.optional(v.array(v.string())),
     isActive: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { adminId, ...updates } = args;
+    const { adminId, email, ...updates } = args;
+
+    // If email is being changed, check it's not already in use
+    if (email) {
+      const existing = await ctx.db
+        .query("adminUsers")
+        .withIndex("by_email", (q) => q.eq("email", email.toLowerCase()))
+        .first();
+
+      if (existing && existing._id !== adminId) {
+        return { success: false, error: "Email already in use" };
+      }
+    }
+
     const filteredUpdates = Object.fromEntries(
-      Object.entries(updates).filter(([_, v]) => v !== undefined)
+      Object.entries({
+        ...updates,
+        ...(email && { email: email.toLowerCase() }),
+      }).filter(([_, v]) => v !== undefined)
     );
     await ctx.db.patch(adminId, filteredUpdates);
     return { success: true };
