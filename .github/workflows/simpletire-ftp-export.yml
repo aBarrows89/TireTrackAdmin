@@ -1,0 +1,114 @@
+name: Simple Tire FTP Export
+
+on:
+  schedule:
+    # 11pm EST = 4am UTC (EST is UTC-5)
+    # During DST (EDT), 11pm EDT = 3am UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  export-to-ftp:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get today's date (EST)
+        id: date
+        run: |
+          # Get current date in EST timezone
+          DATE=$(TZ='America/New_York' date +%Y-%m-%d)
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "Today's date (EST): $DATE"
+
+      - name: Fetch Simple Tire scans from Convex
+        id: fetch
+        run: |
+          # Calculate EST midnight timestamps
+          # Get start of day in EST
+          START_TS=$(TZ='America/New_York' date -d "today 00:00:00" +%s)000
+          END_TS=$(TZ='America/New_York' date -d "today 23:59:59" +%s)999
+
+          echo "Fetching scans from $START_TS to $END_TS"
+
+          # Query Convex for Simple Tire scans
+          RESPONSE=$(curl -s -X POST "${{ secrets.CONVEX_URL }}/api/query" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"path\": \"queries:getVendorDateRangeReport\",
+              \"args\": {
+                \"startDate\": $START_TS,
+                \"endDate\": $END_TS,
+                \"vendor\": \"Simple Tire\"
+              }
+            }")
+
+          # Extract scans and convert to CSV
+          echo "$RESPONSE" | node -e "
+            const fs = require('fs');
+            let data = '';
+            process.stdin.on('data', chunk => data += chunk);
+            process.stdin.on('end', () => {
+              const response = JSON.parse(data);
+              const scans = response.value?.byVendor?.['Simple Tire'] || [];
+
+              console.log('Scan count: ' + scans.length);
+
+              if (scans.length === 0) {
+                fs.writeFileSync('scan_count.txt', '0');
+                return;
+              }
+
+              // Generate CSV
+              const csvRows = [
+                'Tracking Number,Carrier,Truck Number,Recipient Name,Address,City,State,Destination,Scanned At,Vendor Account'
+              ];
+
+              for (const scan of scans) {
+                const scannedAt = new Date(scan.scannedAt).toISOString();
+                csvRows.push([
+                  '\"' + (scan.trackingNumber || '') + '\"',
+                  '\"' + (scan.carrier || '') + '\"',
+                  '\"' + (scan.truckNumber || '') + '\"',
+                  '\"' + (scan.recipientName || '') + '\"',
+                  '\"' + (scan.address || '') + '\"',
+                  '\"' + (scan.city || '') + '\"',
+                  '\"' + (scan.state || '') + '\"',
+                  '\"' + (scan.destination || '') + '\"',
+                  '\"' + scannedAt + '\"',
+                  '\"' + (scan.vendorAccount || '') + '\"'
+                ].join(','));
+              }
+
+              fs.writeFileSync('simpletire_manifest.csv', csvRows.join('\n'));
+              fs.writeFileSync('scan_count.txt', scans.length.toString());
+              console.log('CSV file created with ' + scans.length + ' rows');
+            });
+          "
+
+          SCAN_COUNT=$(cat scan_count.txt 2>/dev/null || echo "0")
+          echo "scan_count=$SCAN_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Upload to Simple Tire FTP
+        if: steps.fetch.outputs.scan_count != '0'
+        run: |
+          FILENAME="simpletire_manifest_${{ steps.date.outputs.date }}.csv"
+
+          echo "Uploading $FILENAME with ${{ steps.fetch.outputs.scan_count }} scans..."
+
+          # Upload using curl with FTP
+          curl --insecure -v \
+            -T simpletire_manifest.csv \
+            -u "${{ secrets.SIMPLETIRE_FTP_USER }}:${{ secrets.SIMPLETIRE_FTP_PASSWORD }}" \
+            "ftp://${{ secrets.SIMPLETIRE_FTP_HOST }}/Labels/$FILENAME"
+
+          echo "Upload complete!"
+
+      - name: Skip notification (no scans)
+        if: steps.fetch.outputs.scan_count == '0'
+        run: |
+          echo "No Simple Tire scans found for today (${{ steps.date.outputs.date }}). Skipping upload."
