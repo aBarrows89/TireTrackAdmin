@@ -5,7 +5,9 @@ frontend:
       commands:
         - nvm install 20
         - nvm use 20
-        - npm ci
+        - node -v
+        - npm -v
+        - npm install
     build:
       commands:
         - npm run build
