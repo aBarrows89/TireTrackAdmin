@@ -35,26 +35,39 @@ jobs:
             const fs = require('fs');
             const https = require('https');
 
-            // Get today's date in EST
+            // Get today's date in EST and calculate timestamps
             const now = new Date();
-            const estOptions = { timeZone: 'America/New_York' };
-            const estDateStr = now.toLocaleDateString('en-CA', estOptions); // YYYY-MM-DD format
 
-            // Calculate start/end of day in EST
-            const startOfDay = new Date(estDateStr + 'T00:00:00-05:00');
-            const endOfDay = new Date(estDateStr + 'T23:59:59.999-05:00');
+            // Create a date string in EST timezone
+            const formatter = new Intl.DateTimeFormat('en-US', {
+              timeZone: 'America/New_York',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            });
 
-            const startTs = startOfDay.getTime();
-            const endTs = endOfDay.getTime();
+            // Get EST date parts
+            const parts = formatter.formatToParts(now);
+            const getPart = (type) => parts.find(p => p.type === type)?.value;
+            const year = getPart('year');
+            const month = getPart('month');
+            const day = getPart('day');
+            const estDateStr = year + '-' + month + '-' + day;
+
+            // EST midnight = 5am UTC (or 4am during DST)
+            // For simplicity, use 5am UTC as start (covers both EST and EDT)
+            const startTs = new Date(estDateStr + 'T05:00:00.000Z').getTime();
+            const endTs = startTs + (24 * 60 * 60 * 1000) - 1; // End of day
 
             console.log('Date (EST):', estDateStr);
             console.log('Fetching scans from', startTs, 'to', endTs);
 
-            const convexUrl = process.env.CONVEX_URL;
+            const convexUrl = (process.env.CONVEX_URL || '').trim();
             if (!convexUrl) {
               console.error('CONVEX_URL not set');
               process.exit(1);
             }
+            console.log('Convex URL:', convexUrl);
 
             const postData = JSON.stringify({
               path: 'queries:getVendorDateRangeReport',
