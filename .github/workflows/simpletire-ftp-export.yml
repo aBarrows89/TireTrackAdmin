@@ -27,67 +27,110 @@ jobs:
 
       - name: Fetch Simple Tire scans from Convex
         id: fetch
+        env:
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
         run: |
-          # Calculate EST midnight timestamps
-          # Get start of day in EST
-          START_TS=$(TZ='America/New_York' date -d "today 00:00:00" +%s)000
-          END_TS=$(TZ='America/New_York' date -d "today 23:59:59" +%s)999
-
-          echo "Fetching scans from $START_TS to $END_TS"
-
-          # Query Convex for Simple Tire scans
-          RESPONSE=$(curl -s -X POST "${{ secrets.CONVEX_URL }}/api/query" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"path\": \"queries:getVendorDateRangeReport\",
-              \"args\": {
-                \"startDate\": $START_TS,
-                \"endDate\": $END_TS,
-                \"vendor\": \"Simple Tire\"
-              }
-            }")
-
-          # Extract scans and convert to CSV
-          echo "$RESPONSE" | node -e "
+          # Use Node.js to calculate timestamps and fetch data (more reliable than bash date)
+          node -e "
             const fs = require('fs');
-            let data = '';
-            process.stdin.on('data', chunk => data += chunk);
-            process.stdin.on('end', () => {
-              const response = JSON.parse(data);
-              const scans = response.value?.byVendor?.['Simple Tire'] || [];
+            const https = require('https');
 
-              console.log('Scan count: ' + scans.length);
+            // Get today's date in EST
+            const now = new Date();
+            const estOptions = { timeZone: 'America/New_York' };
+            const estDateStr = now.toLocaleDateString('en-CA', estOptions); // YYYY-MM-DD format
 
-              if (scans.length === 0) {
-                fs.writeFileSync('scan_count.txt', '0');
-                return;
+            // Calculate start/end of day in EST
+            const startOfDay = new Date(estDateStr + 'T00:00:00-05:00');
+            const endOfDay = new Date(estDateStr + 'T23:59:59.999-05:00');
+
+            const startTs = startOfDay.getTime();
+            const endTs = endOfDay.getTime();
+
+            console.log('Date (EST):', estDateStr);
+            console.log('Fetching scans from', startTs, 'to', endTs);
+
+            const convexUrl = process.env.CONVEX_URL;
+            if (!convexUrl) {
+              console.error('CONVEX_URL not set');
+              process.exit(1);
+            }
+
+            const postData = JSON.stringify({
+              path: 'queries:getVendorDateRangeReport',
+              args: {
+                startDate: startTs,
+                endDate: endTs,
+                vendor: 'Simple Tire'
               }
-
-              // Generate CSV
-              const csvRows = [
-                'Tracking Number,Carrier,Truck Number,Recipient Name,Address,City,State,Destination,Scanned At,Vendor Account'
-              ];
-
-              for (const scan of scans) {
-                const scannedAt = new Date(scan.scannedAt).toISOString();
-                csvRows.push([
-                  '\"' + (scan.trackingNumber || '') + '\"',
-                  '\"' + (scan.carrier || '') + '\"',
-                  '\"' + (scan.truckNumber || '') + '\"',
-                  '\"' + (scan.recipientName || '') + '\"',
-                  '\"' + (scan.address || '') + '\"',
-                  '\"' + (scan.city || '') + '\"',
-                  '\"' + (scan.state || '') + '\"',
-                  '\"' + (scan.destination || '') + '\"',
-                  '\"' + scannedAt + '\"',
-                  '\"' + (scan.vendorAccount || '') + '\"'
-                ].join(','));
-              }
-
-              fs.writeFileSync('simpletire_manifest.csv', csvRows.join('\n'));
-              fs.writeFileSync('scan_count.txt', scans.length.toString());
-              console.log('CSV file created with ' + scans.length + ' rows');
             });
+
+            const url = new URL(convexUrl + '/api/query');
+            const options = {
+              hostname: url.hostname,
+              port: 443,
+              path: url.pathname,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+              }
+            };
+
+            const req = https.request(options, (res) => {
+              let data = '';
+              res.on('data', chunk => data += chunk);
+              res.on('end', () => {
+                try {
+                  const response = JSON.parse(data);
+                  const scans = response.value?.byVendor?.['Simple Tire'] || [];
+
+                  console.log('Scan count:', scans.length);
+
+                  if (scans.length === 0) {
+                    fs.writeFileSync('scan_count.txt', '0');
+                    return;
+                  }
+
+                  // Generate CSV
+                  const csvRows = [
+                    'Tracking Number,Carrier,Truck Number,Recipient Name,Address,City,State,Destination,Scanned At,Vendor Account'
+                  ];
+
+                  for (const scan of scans) {
+                    const scannedAt = new Date(scan.scannedAt).toISOString();
+                    csvRows.push([
+                      '\"' + (scan.trackingNumber || '') + '\"',
+                      '\"' + (scan.carrier || '') + '\"',
+                      '\"' + (scan.truckNumber || '') + '\"',
+                      '\"' + (scan.recipientName || '') + '\"',
+                      '\"' + (scan.address || '') + '\"',
+                      '\"' + (scan.city || '') + '\"',
+                      '\"' + (scan.state || '') + '\"',
+                      '\"' + (scan.destination || '') + '\"',
+                      '\"' + scannedAt + '\"',
+                      '\"' + (scan.vendorAccount || '') + '\"'
+                    ].join(','));
+                  }
+
+                  fs.writeFileSync('simpletire_manifest.csv', csvRows.join('\n'));
+                  fs.writeFileSync('scan_count.txt', scans.length.toString());
+                  console.log('CSV file created with ' + scans.length + ' rows');
+                } catch (e) {
+                  console.error('Parse error:', e.message);
+                  console.error('Response:', data);
+                  process.exit(1);
+                }
+              });
+            });
+
+            req.on('error', (e) => {
+              console.error('Request error:', e.message);
+              process.exit(1);
+            });
+
+            req.write(postData);
+            req.end();
           "
 
           SCAN_COUNT=$(cat scan_count.txt 2>/dev/null || echo "0")
