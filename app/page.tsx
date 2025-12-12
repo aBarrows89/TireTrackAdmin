@@ -76,6 +76,10 @@ function Dashboard() {
     api.queries.getTruckScans,
     selectedTruck ? { truckId: selectedTruck as any } : "skip"
   );
+  const userAccuracyStats = useQuery(
+    api.queries.getUserAccuracyStats,
+    showUsers ? {} : "skip"
+  );
 
   const deleteTruck = useMutation(api.mutations.deleteTruck);
   const updateUser = useMutation(api.mutations.updateUser);
@@ -105,8 +109,8 @@ function Dashboard() {
       const query = searchQuery.toLowerCase();
       // Search by truck number, vendor, or tracking number
       const matchesTruckNumber = truck.truckNumber.toLowerCase().includes(query);
-      const matchesVendor = truck.vendors?.some((v: string) => v.toLowerCase().includes(query));
-      const matchesTracking = truck.trackingNumbers?.some((t: string) => t.toLowerCase().includes(query));
+      const matchesVendor = truck.vendors?.some((v) => v && v.toLowerCase().includes(query));
+      const matchesTracking = truck.trackingNumbers?.some((t) => t && t.toLowerCase().includes(query));
       const matchesSearch = !query || matchesTruckNumber || matchesVendor || matchesTracking;
       const matchesStatus = statusFilter === "all" || truck.status === statusFilter;
       const matchesLocation = matchesLocationFilter(truck.locationId, effectiveLocationFilter);
@@ -719,23 +723,53 @@ function Dashboard() {
                       <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Name</th>
                       <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider hidden sm:table-cell">Employee ID</th>
                       <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Location</th>
-                      <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider hidden md:table-cell">PIN</th>
-                      <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider hidden lg:table-cell">Role</th>
+                      <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider hidden md:table-cell">This Month</th>
+                      <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider hidden md:table-cell">All Time</th>
+                      <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider hidden lg:table-cell">Accuracy</th>
                       <th className="px-5 py-4 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
                       {canEdit && <th className="px-5 py-4 text-right text-xs font-semibold text-slate-400 uppercase tracking-wider">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700/30">
-                    {filteredUsers?.map((user) => (
+                    {filteredUsers?.map((user) => {
+                      const userStats = userAccuracyStats?.users?.find((u: any) => u.userId === user._id);
+                      const accuracy = userStats?.accuracy ?? 100;
+                      const accuracyColor = accuracy >= 99 ? "text-emerald-400" : accuracy >= 98 ? "text-yellow-400" : "text-red-400";
+                      return (
                       <tr key={user._id} className="hover:bg-slate-800/50 transition-colors">
                         <td className="px-5 py-4 font-medium text-white">{user.name}</td>
                         <td className="px-5 py-4 text-slate-400 font-mono text-sm hidden sm:table-cell">{user.empId}</td>
                         <td className="px-5 py-4 text-slate-300">{user.locationName || "-"}</td>
-                        <td className="px-5 py-4 font-mono text-sm text-slate-500 hidden md:table-cell">****</td>
-                        <td className="px-5 py-4 hidden lg:table-cell">
-                          <span className="px-2.5 py-1 bg-slate-700/50 border border-slate-600/50 rounded-lg text-xs font-medium text-slate-300">
-                            {user.role || "user"}
-                          </span>
+                        <td className="px-5 py-4 text-right hidden md:table-cell">
+                          {userStats ? (
+                            <div>
+                              <span className="font-semibold text-white">{userStats.monthlyScans?.toLocaleString() || 0}</span>
+                              {userStats.monthlyBadScans > 0 && (
+                                <span className="text-red-400 text-xs ml-1">({userStats.monthlyBadScans} bad)</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-600">-</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 text-right hidden md:table-cell">
+                          {userStats ? (
+                            <div>
+                              <span className="text-slate-300">{userStats.totalScans?.toLocaleString() || 0}</span>
+                              {userStats.badScans > 0 && (
+                                <span className="text-red-400 text-xs ml-1">({userStats.badScans} bad)</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-600">-</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 text-right hidden lg:table-cell">
+                          {userStats && userStats.totalScans > 0 ? (
+                            <span className={`font-semibold ${accuracyColor}`}>{accuracy.toFixed(1)}%</span>
+                          ) : (
+                            <span className="text-slate-600">-</span>
+                          )}
                         </td>
                         <td className="px-5 py-4">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium ${
@@ -787,7 +821,8 @@ function Dashboard() {
                           </td>
                         )}
                       </tr>
-                    ))}
+                    );
+                    })}
                   </tbody>
                 </table>
               </div>
