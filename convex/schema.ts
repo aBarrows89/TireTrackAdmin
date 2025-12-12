@@ -70,8 +70,13 @@ export default defineSchema({
     isMiscan: v.optional(v.boolean()),
     noVendorKnown: v.optional(v.boolean()),
     potentialAccountNumber: v.optional(v.string()), // Extracted account number for pattern matching
+    // Duplicate tracking - when user adds a scan they know is a duplicate
+    isDuplicate: v.optional(v.boolean()),
+    duplicateOfScanId: v.optional(v.id("scans")), // Original scan this is a duplicate of
+    duplicateAddedAt: v.optional(v.number()), // When they clicked "add anyway"
   }).index("by_truck", ["truckId"])
-    .index("by_vendor", ["vendor"]),
+    .index("by_vendor", ["vendor"])
+    .index("by_tracking", ["trackingNumber"]),
 
   vendorAccounts: defineTable({
     accountNumber: v.string(),

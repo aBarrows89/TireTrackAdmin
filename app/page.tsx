@@ -54,8 +54,9 @@ function Dashboard() {
   const [newAdmin, setNewAdmin] = useState({ email: "", password: "", name: "", role: "admin" as "admin" | "viewer", locations: ["all"] });
   const [newUser, setNewUser] = useState({ empId: "", name: "", pin: "", locationId: "", locationName: "", role: "user" });
   const [newUserError, setNewUserError] = useState("");
-  const [editingAdmin, setEditingAdmin] = useState<{ id: string; email: string; name: string; role: "superadmin" | "admin" | "viewer" } | null>(null);
+  const [editingAdmin, setEditingAdmin] = useState<{ id: string; email: string; name: string; role: "superadmin" | "admin" | "viewer"; allowedLocations: string[] } | null>(null);
   const [editAdminError, setEditAdminError] = useState("");
+  const [markingMiscan, setMarkingMiscan] = useState<{ scanId: string; trackingNumber: string; scannedByName: string } | null>(null);
 
   const getTodayMidnightEST = () => {
     const now = new Date();
@@ -83,6 +84,7 @@ function Dashboard() {
   const createAdmin = useMutation(api.auth.createAdmin);
   const updateAdmin = useMutation(api.auth.updateAdmin);
   const deleteAdmin = useMutation(api.auth.deleteAdmin);
+  const markScanAsMiscan = useMutation(api.mutations.markScanAsMiscan);
 
   const effectiveLocationFilter = useMemo(() => {
     if (admin?.allowedLocations.includes("all")) return locationFilter;
@@ -100,7 +102,12 @@ function Dashboard() {
 
   const filteredTrucks = useMemo(() => {
     const filtered = trucks?.filter((truck) => {
-      const matchesSearch = truck.truckNumber.toLowerCase().includes(searchQuery.toLowerCase());
+      const query = searchQuery.toLowerCase();
+      // Search by truck number, vendor, or tracking number
+      const matchesTruckNumber = truck.truckNumber.toLowerCase().includes(query);
+      const matchesVendor = truck.vendors?.some((v: string) => v.toLowerCase().includes(query));
+      const matchesTracking = truck.trackingNumbers?.some((t: string) => t.toLowerCase().includes(query));
+      const matchesSearch = !query || matchesTruckNumber || matchesVendor || matchesTracking;
       const matchesStatus = statusFilter === "all" || truck.status === statusFilter;
       const matchesLocation = matchesLocationFilter(truck.locationId, effectiveLocationFilter);
       return matchesSearch && matchesStatus && matchesLocation;
@@ -221,8 +228,9 @@ function Dashboard() {
   };
 
   const handleCreateAdmin = async () => {
-    if (!canManageAdmins) return;
+    if (!canManageAdmins || !admin?.id) return;
     const result = await createAdmin({
+      callerAdminId: admin.id as any,
       email: newAdmin.email,
       password: newAdmin.password,
       name: newAdmin.name,
@@ -414,6 +422,15 @@ function Dashboard() {
                 </svg>
                 <span className="hidden sm:inline">Reports</span>
               </Link>
+              <Link
+                href="/app-download"
+                className="px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-700/50 transition-all whitespace-nowrap flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                <span className="hidden sm:inline">App</span>
+              </Link>
               <button
                 onClick={() => { setShowUsers(true); setShowAdmins(false); }}
                 className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap flex items-center gap-1.5 ${
@@ -467,10 +484,10 @@ function Dashboard() {
                 </svg>
                 <input
                   type="text"
-                  placeholder="Search..."
+                  placeholder="Truck, vendor, tracking..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full sm:w-48 pl-9 sm:pl-10 pr-3 sm:pr-4 py-2 sm:py-2.5 bg-slate-800/80 border border-slate-700/50 rounded-xl text-sm focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all"
+                  className="w-full sm:w-56 pl-9 sm:pl-10 pr-3 sm:pr-4 py-2 sm:py-2.5 bg-slate-800/80 border border-slate-700/50 rounded-xl text-sm focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all"
                 />
               </div>
             </div>
@@ -618,7 +635,7 @@ function Dashboard() {
                         <td className="px-5 py-4">
                           <div className="flex items-center justify-end gap-1">
                             <button
-                              onClick={() => setEditingAdmin({ id: a.id, email: a.email, name: a.name, role: a.role })}
+                              onClick={() => setEditingAdmin({ id: a.id, email: a.email, name: a.name, role: a.role, allowedLocations: a.allowedLocations })}
                               className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
                               title="Edit"
                             >
@@ -627,7 +644,7 @@ function Dashboard() {
                               </svg>
                             </button>
                             <button
-                              onClick={() => updateAdmin({ adminId: a.id as any, isActive: !a.isActive })}
+                              onClick={() => admin?.id && updateAdmin({ callerAdminId: admin.id as any, adminId: a.id as any, isActive: !a.isActive })}
                               className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
                               title={a.isActive ? "Deactivate" : "Activate"}
                             >
@@ -643,7 +660,7 @@ function Dashboard() {
                             </button>
                             {a.id !== admin?.id && (
                               <button
-                                onClick={() => deleteAdmin({ adminId: a.id as any })}
+                                onClick={() => admin?.id && deleteAdmin({ callerAdminId: admin.id as any, adminId: a.id as any })}
                                 className="p-2 hover:bg-red-500/20 rounded-lg transition-colors"
                                 title="Delete"
                               >
@@ -842,7 +859,17 @@ function Dashboard() {
                                 <span className="text-slate-600">|</span>
                                 <span className="font-medium">{truck.scanCount || 0} scans</span>
                               </div>
-                              <div className="text-xs text-slate-500 mt-1">{getLocationName(truck.locationId)}</div>
+                              <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+                                <span>{getLocationName(truck.locationId)}</span>
+                                <span className="text-slate-600">|</span>
+                                <span className="text-cyan-400/70">Opened: {truck.openedByName || "Unknown"}</span>
+                                {truck.closedByName && (
+                                  <>
+                                    <span className="text-slate-600">|</span>
+                                    <span className="text-amber-400/70">Closed: {truck.closedByName}</span>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           </div>
                           {canEdit && (
@@ -984,16 +1011,51 @@ function Dashboard() {
                       <thead className="sticky top-0 bg-slate-900">
                         <tr className="text-left text-slate-400 text-xs border-b border-slate-700">
                           <th className="pb-3 font-medium">Tracking #</th>
+                          <th className="pb-3 font-medium">Scanned By</th>
                           <th className="pb-3 font-medium">Time</th>
-                          <th className="pb-3 font-medium">Raw Barcode</th>
+                          <th className="pb-3 font-medium">Status</th>
+                          <th className="pb-3 font-medium"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-700/30">
                         {unknownScansAnalysis.map((scan) => (
-                          <tr key={scan._id} className="hover:bg-slate-800/50 transition-colors">
+                          <tr key={scan._id} className={`hover:bg-slate-800/50 transition-colors ${scan.isMiscan ? "bg-red-500/10" : ""}`}>
                             <td className="py-3 font-mono text-cyan-300 text-sm">{scan.trackingNumber}</td>
+                            <td className="py-3 text-slate-300 text-sm">{scan.scannedByName || "Unknown"}</td>
                             <td className="py-3 text-slate-500 text-sm">{formatDate(scan.scannedAt)}</td>
-                            <td className="py-3 text-slate-400 text-xs font-mono max-w-[300px] truncate" title={scan.rawBarcode}>{scan.rawBarcode}</td>
+                            <td className="py-3">
+                              {scan.isMiscan ? (
+                                <span className="inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium bg-red-500/20 text-red-400 border border-red-500/20">
+                                  Bad Scan
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/20">
+                                  Unknown
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3">
+                              {!scan.isMiscan && canEdit && (
+                                <button
+                                  onClick={() => setMarkingMiscan({ scanId: scan._id, trackingNumber: scan.trackingNumber, scannedByName: scan.scannedByName || "Unknown" })}
+                                  className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-xs rounded-lg border border-red-500/20 transition-colors"
+                                  title="Mark as bad scan"
+                                >
+                                  Mark Bad
+                                </button>
+                              )}
+                              {scan.isMiscan && canEdit && (
+                                <button
+                                  onClick={async () => {
+                                    await markScanAsMiscan({ scanId: scan._id as any, isMiscan: false });
+                                  }}
+                                  className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded-lg transition-colors"
+                                  title="Undo bad scan"
+                                >
+                                  Undo
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1066,6 +1128,8 @@ function Dashboard() {
                 <div><p className="text-slate-400 text-sm mb-1">Account</p><p className="font-mono text-sm">{selectedScan.vendorAccount || "-"}</p></div>
                 <div><p className="text-slate-400 text-sm mb-1">Destination</p><p>{selectedScan.destination || "-"}</p></div>
                 <div><p className="text-slate-400 text-sm mb-1">Recipient</p><p>{selectedScan.recipientName || "-"}</p></div>
+                <div><p className="text-slate-400 text-sm mb-1">Scanned By</p><p className="text-cyan-400">{selectedScan.scannedByName || "Unknown"}</p></div>
+                <div><p className="text-slate-400 text-sm mb-1">Scanned At</p><p className="text-slate-300">{selectedScan.scannedAt ? new Date(selectedScan.scannedAt).toLocaleString() : "-"}</p></div>
               </div>
               {selectedScan.address && (
                 <div><p className="text-slate-400 text-sm mb-1">Address</p><p>{selectedScan.address}{selectedScan.city ? `, ${selectedScan.city}` : ""}{selectedScan.state ? `, ${selectedScan.state}` : ""}</p></div>
@@ -1132,12 +1196,14 @@ function Dashboard() {
               <div><label className="block text-slate-400 text-sm mb-2">Name</label><input type="text" value={editingAdmin.name} onChange={(e) => setEditingAdmin({ ...editingAdmin, name: e.target.value })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all" /></div>
               <div><label className="block text-slate-400 text-sm mb-2">Email</label><input type="email" value={editingAdmin.email} onChange={(e) => setEditingAdmin({ ...editingAdmin, email: e.target.value })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all" /></div>
               <div><label className="block text-slate-400 text-sm mb-2">Role</label><select value={editingAdmin.role} onChange={(e) => setEditingAdmin({ ...editingAdmin, role: e.target.value as "superadmin" | "admin" | "viewer" })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all"><option value="superadmin">Superadmin</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select></div>
+              <div><label className="block text-slate-400 text-sm mb-2">Location Access</label><select value={editingAdmin.allowedLocations[0] || "all"} onChange={(e) => setEditingAdmin({ ...editingAdmin, allowedLocations: [e.target.value] })} className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all"><option value="all">All Locations</option><option value="latrobe">Latrobe</option><option value="everson">Everson</option><option value="chestnut">Chestnut</option></select></div>
               <div className="flex gap-3 pt-2"><button onClick={() => { setEditingAdmin(null); setEditAdminError(""); }} className="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors">Cancel</button><button onClick={async () => {
                 if (!editingAdmin.name.trim() || !editingAdmin.email.trim()) {
                   setEditAdminError("Name and email are required");
                   return;
                 }
-                const result = await updateAdmin({ adminId: editingAdmin.id as any, name: editingAdmin.name, email: editingAdmin.email, role: editingAdmin.role });
+                if (!admin?.id) return;
+                const result = await updateAdmin({ callerAdminId: admin.id as any, adminId: editingAdmin.id as any, name: editingAdmin.name, email: editingAdmin.email, role: editingAdmin.role, allowedLocations: editingAdmin.allowedLocations });
                 if (result.success) {
                   setEditingAdmin(null);
                   setEditAdminError("");
@@ -1145,6 +1211,36 @@ function Dashboard() {
                   setEditAdminError(result.error || "Failed to update admin");
                 }
               }} className="flex-1 px-4 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 rounded-xl font-medium shadow-lg shadow-cyan-500/20 transition-all">Save</button></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {markingMiscan && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setMarkingMiscan(null)}>
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-sm w-full p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center">
+              <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold mb-2">Mark as Bad Scan?</h3>
+              <p className="text-slate-400 text-sm mb-2">This will log the bad scan against the user:</p>
+              <p className="text-cyan-400 font-medium mb-2">{markingMiscan.scannedByName}</p>
+              <p className="text-slate-500 text-xs font-mono mb-6">{markingMiscan.trackingNumber}</p>
+              <div className="flex gap-3">
+                <button onClick={() => setMarkingMiscan(null)} className="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors">Cancel</button>
+                <button
+                  onClick={async () => {
+                    await markScanAsMiscan({ scanId: markingMiscan.scanId as any, isMiscan: true });
+                    setMarkingMiscan(null);
+                  }}
+                  className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-medium transition-colors"
+                >
+                  Mark Bad
+                </button>
+              </div>
             </div>
           </div>
         </div>

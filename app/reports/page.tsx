@@ -9,6 +9,190 @@ import { Id } from "../../convex/_generated/dataModel";
 
 type ReportType = "daily" | "vendor-range";
 
+// No Vendor Known Modal Component
+function NoVendorKnownModal({
+  onClose,
+  data,
+}: {
+  onClose: () => void;
+  data: any;
+}) {
+  const markAsNoVendorKnown = useMutation(api.mutations.markScanAsNoVendorKnown);
+  const [marking, setMarking] = useState<string | null>(null);
+
+  const handleToggle = async (scanId: Id<"scans">, noVendorKnown: boolean) => {
+    setMarking(scanId);
+    await markAsNoVendorKnown({ scanId, noVendorKnown });
+    setMarking(null);
+  };
+
+  const generateCSV = () => {
+    if (!data?.groupedByAccount) return;
+    const headers = ["Account Number", "Count", "Likely New Vendor", "Sample Tracking Numbers"];
+    const rows = data.groupedByAccount.map((g: any) => [
+      g.accountNumber,
+      g.count,
+      g.likelyNewVendor ? "Yes" : "No",
+      g.sampleScans.map((s: any) => s.trackingNumber).join("; "),
+    ]);
+    const csv = [headers.join(","), ...rows.map((r: string[]) => r.map(v => `"${v}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `no_vendor_known_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+          <div>
+            <h2 className="text-xl font-bold text-white">No Vendor Known Report</h2>
+            <p className="text-slate-500 text-sm">{data?.totalNoVendorKnown || 0} valid 2D scans without vendor match</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={generateCSV}
+              className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download CSV
+            </button>
+            <button
+              onClick={onClose}
+              className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center transition-colors"
+            >
+              <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-6">
+          {!data ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-10 h-10 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-purple-400">{data.totalNoVendorKnown}</p>
+                  <p className="text-slate-500 text-xs">Total No Vendor</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-pink-400">{data.potentialNewVendors?.length || 0}</p>
+                  <p className="text-slate-500 text-xs">Potential New Vendors (7+)</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-slate-400">{data.oneOffVendors || 0}</p>
+                  <p className="text-slate-500 text-xs">One-Off Vendors</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-slate-500">{data.noAccountNumber || 0}</p>
+                  <p className="text-slate-500 text-xs">No Account Number</p>
+                </div>
+              </div>
+
+              {/* Potential New Vendors Section */}
+              {data.potentialNewVendors?.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-pink-400 mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    Potential New Vendors (7+ occurrences - research these!)
+                  </h3>
+                  <div className="bg-pink-500/10 rounded-xl p-4 border border-pink-500/30">
+                    <div className="flex flex-wrap gap-3">
+                      {data.potentialNewVendors.map((g: any) => (
+                        <div key={g.accountNumber} className="bg-slate-800/80 rounded-lg px-4 py-3 border border-slate-700/50">
+                          <div className="flex items-center gap-3">
+                            <span className="text-pink-400 font-bold text-xl">{g.count}</span>
+                            <div>
+                              <p className="text-slate-200 font-mono text-sm">{g.accountNumber}</p>
+                              <p className="text-slate-500 text-xs">scans with this account</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-slate-500 text-xs mt-3">
+                      These account numbers appear frequently - consider researching to identify the vendor
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Grouped by Account Table */}
+              <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-900">
+                      <tr className="text-slate-500 text-xs">
+                        <th className="text-left py-3 px-4">Account Number</th>
+                        <th className="text-center py-3 px-4">Count</th>
+                        <th className="text-left py-3 px-4">Sample Tracking</th>
+                        <th className="text-center py-3 px-4">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {data.groupedByAccount?.slice(0, 100).map((group: any) => (
+                        <tr key={group.accountNumber} className={`hover:bg-slate-800/50 ${group.likelyNewVendor ? "bg-pink-500/5" : ""}`}>
+                          <td className="py-3 px-4 font-mono text-sm text-slate-300">{group.accountNumber}</td>
+                          <td className="py-3 px-4 text-center">
+                            <span className={`px-2 py-1 rounded text-xs font-bold ${
+                              group.likelyNewVendor ? "bg-pink-500/20 text-pink-400" : "bg-slate-700/50 text-slate-400"
+                            }`}>
+                              {group.count}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-wrap gap-1">
+                              {group.sampleScans.slice(0, 3).map((scan: any, i: number) => (
+                                <span key={i} className="text-xs bg-slate-700/50 px-2 py-0.5 rounded font-mono text-slate-400">
+                                  {scan.trackingNumber.slice(0, 15)}...
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {group.likelyNewVendor ? (
+                              <span className="text-xs px-2 py-1 bg-pink-500/20 text-pink-400 rounded">Research</span>
+                            ) : group.count === 1 ? (
+                              <span className="text-xs px-2 py-1 bg-slate-700/50 text-slate-500 rounded">One-off</span>
+                            ) : (
+                              <span className="text-xs px-2 py-1 bg-slate-700/50 text-slate-400 rounded">Monitor</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {data.groupedByAccount?.length > 100 && (
+                    <p className="text-center text-slate-500 text-xs py-3">
+                      Showing 100 of {data.groupedByAccount.length} account groups. Download CSV for full list.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Unmatched Scans Modal Component
 function UnmatchedScansModal({
   onClose,
@@ -289,6 +473,266 @@ function UnmatchedScansModal({
   );
 }
 
+// Duplicate Offenders Modal Component
+function DuplicateOffendersModal({
+  onClose,
+  data,
+}: {
+  onClose: () => void;
+  data: any;
+}) {
+  const generateCSV = () => {
+    if (!data?.users) return;
+    const headers = ["User Name", "User ID", "Duplicate Count", "Sample Tracking Numbers"];
+    const rows = data.users.map((u: any) => [
+      u.userName,
+      u.userId,
+      u.duplicateCount,
+      u.duplicates.slice(0, 5).map((d: any) => d.trackingNumber).join("; "),
+    ]);
+    const csv = [headers.join(","), ...rows.map((r: string[]) => r.map(v => `"${v}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `duplicate_offenders_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+          <div>
+            <h2 className="text-xl font-bold text-white">Duplicate Scan Offenders</h2>
+            <p className="text-slate-500 text-sm">Users who added known duplicates - training opportunities</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={generateCSV}
+              className="px-4 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download CSV
+            </button>
+            <button
+              onClick={onClose}
+              className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center transition-colors"
+            >
+              <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-6">
+          {!data ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-amber-400">{data.overall?.totalDuplicates || 0}</p>
+                  <p className="text-slate-500 text-xs">Total Duplicates</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-slate-400">{data.overall?.totalScans?.toLocaleString() || 0}</p>
+                  <p className="text-slate-500 text-xs">Total Scans</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-red-400">{data.overall?.duplicateRate?.toFixed(2) || 0}%</p>
+                  <p className="text-slate-500 text-xs">Duplicate Rate</p>
+                </div>
+                <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+                  <p className="text-2xl font-bold text-orange-400">{data.monthly?.totalDuplicates || 0}</p>
+                  <p className="text-slate-500 text-xs">{data.monthly?.monthName || "This Month"}</p>
+                </div>
+              </div>
+
+              {/* User List */}
+              {data.users?.length === 0 ? (
+                <div className="text-center py-10 text-slate-500">
+                  <svg className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-lg font-medium text-emerald-400">No duplicate offenders!</p>
+                  <p className="text-sm mt-1">All users are scanning properly</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {data.users.map((user: any) => (
+                    <div key={user.userId} className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-amber-500/20 rounded-lg flex items-center justify-center">
+                            <span className="text-lg font-bold text-amber-400">{user.userName.charAt(0)}</span>
+                          </div>
+                          <div>
+                            <p className="font-medium text-white">{user.userName}</p>
+                            <p className="text-slate-500 text-xs">Needs Training</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-bold text-amber-400">{user.duplicateCount}</p>
+                          <p className="text-slate-500 text-xs">duplicates added</p>
+                        </div>
+                      </div>
+                      {/* Recent duplicates */}
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {user.duplicates.slice(0, 5).map((dup: any, i: number) => (
+                          <span key={i} className="text-xs bg-slate-800/80 px-2 py-1 rounded font-mono text-slate-400">
+                            {dup.truckNumber}: {dup.trackingNumber.slice(0, 12)}...
+                          </span>
+                        ))}
+                        {user.duplicates.length > 5 && (
+                          <span className="text-xs text-slate-500 px-2 py-1">
+                            +{user.duplicates.length - 5} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// User Accuracy Modal Component
+function UserAccuracyModal({
+  onClose,
+  data,
+}: {
+  onClose: () => void;
+  data: any;
+}) {
+  const getAccuracyColor = (accuracy: number) => accuracy >= 99 ? "text-emerald-400" : accuracy >= 98 ? "text-yellow-400" : "text-red-400";
+  const getBgColor = (accuracy: number) => accuracy >= 99 ? "bg-emerald-500/10 border-emerald-500/20" : accuracy >= 98 ? "bg-yellow-500/10 border-yellow-500/20" : "bg-red-500/10 border-red-500/20";
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+          <div>
+            <h2 className="text-xl font-bold text-white">User Scanning Accuracy</h2>
+            <p className="text-slate-500 text-sm">Target: 99% or above</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center transition-colors"
+          >
+            <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto p-6">
+          {!data ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className={`rounded-xl p-4 border ${getBgColor(data.monthly?.accuracy || 100)}`}>
+                  <p className="text-slate-400 text-sm mb-1">{data.monthly?.monthName || "This Month"}</p>
+                  <p className={`text-3xl font-bold ${getAccuracyColor(data.monthly?.accuracy || 100)}`}>
+                    {data.monthly?.accuracy?.toFixed(2)}%
+                  </p>
+                  <p className="text-slate-500 text-xs mt-1">
+                    {data.monthly?.totalScans?.toLocaleString()} scans, {data.monthly?.totalBadScans} bad
+                  </p>
+                </div>
+                <div className={`rounded-xl p-4 border ${getBgColor(data.overall?.accuracy || 100)}`}>
+                  <p className="text-slate-400 text-sm mb-1">All Time</p>
+                  <p className={`text-3xl font-bold ${getAccuracyColor(data.overall?.accuracy || 100)}`}>
+                    {data.overall?.accuracy?.toFixed(2)}%
+                  </p>
+                  <p className="text-slate-500 text-xs mt-1">
+                    {data.overall?.totalScans?.toLocaleString()} scans, {data.overall?.totalBadScans} bad
+                  </p>
+                </div>
+              </div>
+
+              {/* User List */}
+              {data.users?.length === 0 ? (
+                <div className="text-center py-10 text-slate-500">No scan data available</div>
+              ) : (
+                <div className="space-y-3">
+                  {data.users.filter((u: any) => u.totalScans > 0 || u.monthlyScans > 0).map((user: any) => {
+                    // Use monthly accuracy for coloring if they have monthly scans, otherwise all-time
+                    const primaryAccuracy = user.monthlyScans > 0 ? user.monthlyAccuracy : user.accuracy;
+                    return (
+                      <div key={user.userId} className={`flex items-center justify-between px-4 py-3 rounded-xl border ${getBgColor(primaryAccuracy)}`}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center">
+                            <span className="text-lg font-bold text-slate-400">{user.name.charAt(0)}</span>
+                          </div>
+                          <div>
+                            <p className="font-medium text-white">{user.name}</p>
+                            <p className="text-slate-500 text-xs">ID: {user.empId}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-6">
+                          {/* This Month */}
+                          <div className="text-right">
+                            <p className="text-slate-500 text-xs mb-0.5">This Month</p>
+                            {user.monthlyScans > 0 ? (
+                              <>
+                                <p className={`text-lg font-bold ${getAccuracyColor(user.monthlyAccuracy)}`}>
+                                  {user.monthlyAccuracy.toFixed(1)}%
+                                </p>
+                                <p className="text-slate-500 text-xs">
+                                  {user.monthlyScans.toLocaleString()} scans
+                                  {user.monthlyBadScans > 0 && <span className="text-red-400"> ({user.monthlyBadScans} bad)</span>}
+                                </p>
+                              </>
+                            ) : (
+                              <p className="text-slate-600 text-sm">No scans</p>
+                            )}
+                          </div>
+                          {/* All Time */}
+                          <div className="text-right min-w-[100px]">
+                            <p className="text-slate-500 text-xs mb-0.5">All Time</p>
+                            <p className={`text-lg font-bold ${getAccuracyColor(user.accuracy)}`}>
+                              {user.accuracy.toFixed(1)}%
+                            </p>
+                            <p className="text-slate-500 text-xs">
+                              {user.totalScans.toLocaleString()} scans
+                              {user.badScans > 0 && <span className="text-red-400"> ({user.badScans} bad)</span>}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReportsPage() {
   const [reportType, setReportType] = useState<ReportType>("daily");
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -308,6 +752,9 @@ function ReportsPage() {
   const [expandedTruck, setExpandedTruck] = useState<string | null>(null);
   const [expandedVendor, setExpandedVendor] = useState<string | null>(null);
   const [showUnmatchedModal, setShowUnmatchedModal] = useState(false);
+  const [showNoVendorKnownModal, setShowNoVendorKnownModal] = useState(false);
+  const [showUserAccuracyModal, setShowUserAccuracyModal] = useState(false);
+  const [showDuplicateOffendersModal, setShowDuplicateOffendersModal] = useState(false);
 
   // Daily report dates
   const { startDate, endDate } = useMemo(() => {
@@ -335,6 +782,19 @@ function ReportsPage() {
   const unmatchedScans = useQuery(
     api.queries.getUnmatchedScansReport,
     showUnmatchedModal ? {} : "skip"
+  );
+  const noVendorKnownReport = useQuery(
+    api.queries.getNoVendorKnownReport,
+    showNoVendorKnownModal ? {} : "skip"
+  );
+  const noVendorKnownCount = useQuery(api.queries.getNoVendorKnownCount);
+  const userAccuracyStats = useQuery(
+    api.queries.getUserAccuracyStats,
+    showUserAccuracyModal ? {} : "skip"
+  );
+  const duplicateOffendersReport = useQuery(
+    api.queries.getDuplicateScansReport,
+    showDuplicateOffendersModal ? {} : "skip"
   );
 
   const autoCloseAll = useMutation(api.mutations.autoCloseAllTrucks);
@@ -629,6 +1089,26 @@ function ReportsPage() {
                     {matchedStats.overall.unmatchedBreakdown.other > 0 && <span className="text-red-500/70">{matchedStats.overall.unmatchedBreakdown.other} other</span>})
                   </button>
                 )}
+                {noVendorKnownCount !== undefined && noVendorKnownCount > 0 && (
+                  <button
+                    onClick={() => setShowNoVendorKnownModal(true)}
+                    className="text-purple-500/70 hover:text-purple-400 transition-colors underline decoration-dotted underline-offset-2"
+                  >
+                    | No Vendor Known: {noVendorKnownCount}
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowUserAccuracyModal(true)}
+                  className="text-emerald-500/70 hover:text-emerald-400 transition-colors underline decoration-dotted underline-offset-2"
+                >
+                  | User Accuracy
+                </button>
+                <button
+                  onClick={() => setShowDuplicateOffendersModal(true)}
+                  className="text-amber-500/70 hover:text-amber-400 transition-colors underline decoration-dotted underline-offset-2"
+                >
+                  | Duplicate Offenders
+                </button>
               </div>
             )}
 
@@ -989,6 +1469,30 @@ function ReportsPage() {
         <UnmatchedScansModal
           onClose={() => setShowUnmatchedModal(false)}
           data={unmatchedScans}
+        />
+      )}
+
+      {/* No Vendor Known Modal */}
+      {showNoVendorKnownModal && (
+        <NoVendorKnownModal
+          onClose={() => setShowNoVendorKnownModal(false)}
+          data={noVendorKnownReport}
+        />
+      )}
+
+      {/* User Accuracy Modal */}
+      {showUserAccuracyModal && (
+        <UserAccuracyModal
+          onClose={() => setShowUserAccuracyModal(false)}
+          data={userAccuracyStats}
+        />
+      )}
+
+      {/* Duplicate Offenders Modal */}
+      {showDuplicateOffendersModal && (
+        <DuplicateOffendersModal
+          onClose={() => setShowDuplicateOffendersModal(false)}
+          data={duplicateOffendersReport}
         />
       )}
     </main>

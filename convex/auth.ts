@@ -102,6 +102,7 @@ export const getAdmin = query({
 // Create new admin (superadmin only) - with temp password
 export const createAdmin = mutation({
   args: {
+    callerAdminId: v.id("adminUsers"),
     email: v.string(),
     password: v.string(),
     name: v.string(),
@@ -109,15 +110,21 @@ export const createAdmin = mutation({
     allowedLocations: v.array(v.string()),
   },
   handler: async (ctx, args) => {
+    // Verify caller is superadmin
+    const caller = await ctx.db.get(args.callerAdminId);
+    if (!caller || caller.role !== "superadmin") {
+      return { success: false, error: "Unauthorized: Only superadmins can create admins" };
+    }
+
     const existing = await ctx.db
       .query("adminUsers")
       .withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase()))
       .first();
-    
+
     if (existing) {
       return { success: false, error: "Email already exists" };
     }
-    
+
     const adminId = await ctx.db.insert("adminUsers", {
       email: args.email.toLowerCase(),
       passwordHash: simpleHash(args.password),
@@ -129,14 +136,15 @@ export const createAdmin = mutation({
       forcePasswordChange: true,
       tempPasswordSetAt: Date.now(),
     });
-    
+
     return { success: true, adminId };
   },
 });
 
-// Update admin
+// Update admin (superadmin only)
 export const updateAdmin = mutation({
   args: {
+    callerAdminId: v.id("adminUsers"),
     adminId: v.id("adminUsers"),
     email: v.optional(v.string()),
     name: v.optional(v.string()),
@@ -145,7 +153,13 @@ export const updateAdmin = mutation({
     isActive: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { adminId, email, ...updates } = args;
+    // Verify caller is superadmin
+    const caller = await ctx.db.get(args.callerAdminId);
+    if (!caller || caller.role !== "superadmin") {
+      return { success: false, error: "Unauthorized: Only superadmins can update admins" };
+    }
+
+    const { callerAdminId, adminId, email, ...updates } = args;
 
     // If email is being changed, check it's not already in use
     if (email) {
@@ -204,16 +218,23 @@ export const changePassword = mutation({
 // Reset password (superadmin sets new temp password for another admin)
 export const resetAdminPassword = mutation({
   args: {
+    callerAdminId: v.id("adminUsers"),
     adminId: v.id("adminUsers"),
     newPassword: v.string(),
   },
   handler: async (ctx, args) => {
+    // Verify caller is superadmin
+    const caller = await ctx.db.get(args.callerAdminId);
+    if (!caller || caller.role !== "superadmin") {
+      return { success: false, error: "Unauthorized: Only superadmins can reset passwords" };
+    }
+
     await ctx.db.patch(args.adminId, {
       passwordHash: simpleHash(args.newPassword),
       forcePasswordChange: true,
       tempPasswordSetAt: Date.now(),
     });
-    
+
     return { success: true };
   },
 });
@@ -237,10 +258,24 @@ export const getAllAdmins = query({
   },
 });
 
-// Delete admin
+// Delete admin (superadmin only)
 export const deleteAdmin = mutation({
-  args: { adminId: v.id("adminUsers") },
+  args: {
+    callerAdminId: v.id("adminUsers"),
+    adminId: v.id("adminUsers"),
+  },
   handler: async (ctx, args) => {
+    // Verify caller is superadmin
+    const caller = await ctx.db.get(args.callerAdminId);
+    if (!caller || caller.role !== "superadmin") {
+      return { success: false, error: "Unauthorized: Only superadmins can delete admins" };
+    }
+
+    // Prevent deleting yourself
+    if (args.callerAdminId === args.adminId) {
+      return { success: false, error: "Cannot delete your own account" };
+    }
+
     await ctx.db.delete(args.adminId);
     return { success: true };
   },

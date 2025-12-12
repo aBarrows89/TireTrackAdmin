@@ -66,14 +66,19 @@ export const getOpenTrucks = query({
   },
 });
 
-// Get all scans for a truck
+// Get all scans for a truck (excludes duplicates by default)
 export const getTruckScans = query({
-  args: { truckId: v.id("trucks") },
+  args: { truckId: v.id("trucks"), includeDuplicates: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    const scans = await ctx.db
+    let scans = await ctx.db
       .query("scans")
       .withIndex("by_truck", (q) => q.eq("truckId", args.truckId))
       .collect();
+
+    // Filter out duplicates unless explicitly requested
+    if (!args.includeDuplicates) {
+      scans = scans.filter((scan) => !scan.isDuplicate);
+    }
 
     // Enrich with user names
     const enrichedScans = await Promise.all(
@@ -90,24 +95,29 @@ export const getTruckScans = query({
   },
 });
 
-// Get truck by ID with scan count
+// Get truck by ID with scan count (excludes duplicates from count)
 export const getTruck = query({
   args: { truckId: v.id("trucks") },
   handler: async (ctx, args) => {
     const truck = await ctx.db.get(args.truckId);
     if (!truck) return null;
 
-    const scans = await ctx.db
+    const allScans = await ctx.db
       .query("scans")
       .withIndex("by_truck", (q) => q.eq("truckId", args.truckId))
       .collect();
 
+    // Only count non-duplicate scans
+    const scans = allScans.filter((scan) => !scan.isDuplicate);
+
     const openedByUser = await ctx.db.get(truck.openedBy);
+    const closedByUser = truck.closedBy ? await ctx.db.get(truck.closedBy) : null;
 
     return {
       ...truck,
       scanCount: scans.length,
       openedByName: openedByUser?.name ?? "Unknown",
+      closedByName: closedByUser?.name ?? null,
     };
   },
 });
@@ -313,16 +323,27 @@ export const getAllTrucks = query({
   args: {},
   handler: async (ctx) => {
     const trucks = await ctx.db.query("trucks").order("desc").collect();
-    
+
     const enrichedTrucks = await Promise.all(
       trucks.map(async (truck) => {
         const scans = await ctx.db
           .query("scans")
           .withIndex("by_truck", (q) => q.eq("truckId", truck._id))
           .collect();
+        const openedByUser = await ctx.db.get(truck.openedBy);
+        const closedByUser = truck.closedBy ? await ctx.db.get(truck.closedBy) : null;
+
+        // Collect unique vendors and tracking numbers for search
+        const vendors = [...new Set(scans.map(s => s.vendor).filter(Boolean))];
+        const trackingNumbers = scans.map(s => s.trackingNumber);
+
         return {
           ...truck,
           scanCount: scans.length,
+          openedByName: openedByUser?.name ?? "Unknown",
+          closedByName: closedByUser?.name ?? null,
+          vendors,
+          trackingNumbers,
         };
       })
     );
@@ -928,5 +949,287 @@ export const getNoVendorKnownCount = query({
   handler: async (ctx) => {
     const scans = await ctx.db.query("scans").collect();
     return scans.filter(s => s.noVendorKnown === true).length;
+  },
+});
+
+// Get user scanning accuracy stats (total scans vs bad scans) - both monthly and all-time
+export const getUserAccuracyStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+    const users = await ctx.db.query("users").collect();
+
+    // Get start of current month (EST timezone)
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const monthStart = startOfMonth.getTime();
+
+    // Create a map of user stats for both all-time and monthly
+    const userStats: Record<string, {
+      userId: string;
+      name: string;
+      empId: string;
+      // All-time stats
+      totalScans: number;
+      badScans: number;
+      accuracy: number;
+      // Monthly stats
+      monthlyScans: number;
+      monthlyBadScans: number;
+      monthlyAccuracy: number;
+    }> = {};
+
+    // Count scans per user
+    for (const scan of scans) {
+      const userId = scan.scannedBy;
+      if (!userStats[userId]) {
+        const user = users.find(u => u._id === userId);
+        userStats[userId] = {
+          userId,
+          name: user?.name || "Unknown",
+          empId: user?.empId || "N/A",
+          totalScans: 0,
+          badScans: 0,
+          accuracy: 100,
+          monthlyScans: 0,
+          monthlyBadScans: 0,
+          monthlyAccuracy: 100,
+        };
+      }
+
+      // All-time counts
+      userStats[userId].totalScans++;
+      if (scan.isMiscan) {
+        userStats[userId].badScans++;
+      }
+
+      // Monthly counts (check if scan is from current month)
+      if (scan.scannedAt >= monthStart) {
+        userStats[userId].monthlyScans++;
+        if (scan.isMiscan) {
+          userStats[userId].monthlyBadScans++;
+        }
+      }
+    }
+
+    // Calculate accuracy for each user (both all-time and monthly)
+    const results = Object.values(userStats).map(user => ({
+      ...user,
+      accuracy: user.totalScans > 0
+        ? ((user.totalScans - user.badScans) / user.totalScans) * 100
+        : 100,
+      monthlyAccuracy: user.monthlyScans > 0
+        ? ((user.monthlyScans - user.monthlyBadScans) / user.monthlyScans) * 100
+        : 100,
+    }));
+
+    // Sort by monthly scans first (most active this month), then all-time
+    results.sort((a, b) => b.monthlyScans - a.monthlyScans || b.totalScans - a.totalScans);
+
+    // Calculate overall stats (all-time)
+    const totalScans = scans.length;
+    const totalBadScans = scans.filter(s => s.isMiscan).length;
+    const overallAccuracy = totalScans > 0
+      ? ((totalScans - totalBadScans) / totalScans) * 100
+      : 100;
+
+    // Calculate overall monthly stats
+    const monthlyScans = scans.filter(s => s.scannedAt >= monthStart);
+    const totalMonthlyScans = monthlyScans.length;
+    const totalMonthlyBadScans = monthlyScans.filter(s => s.isMiscan).length;
+    const overallMonthlyAccuracy = totalMonthlyScans > 0
+      ? ((totalMonthlyScans - totalMonthlyBadScans) / totalMonthlyScans) * 100
+      : 100;
+
+    // Get current month name for display
+    const monthName = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+    return {
+      users: results,
+      overall: {
+        totalScans,
+        totalBadScans,
+        accuracy: overallAccuracy,
+      },
+      monthly: {
+        monthName,
+        totalScans: totalMonthlyScans,
+        totalBadScans: totalMonthlyBadScans,
+        accuracy: overallMonthlyAccuracy,
+      },
+    };
+  },
+});
+
+export const analyzeUnknownCarrierPatterns = query({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+    const unknown = scans.filter(s => !s.vendor || s.vendor === "Unknown");
+
+    // Categorize and analyze patterns
+    const results: {
+      ups: { count: number; samples: Array<{ tracking: string; raw: string; carrier: string }> };
+      fedex: { count: number; samples: Array<{ tracking: string; raw: string; carrier: string }> };
+      usps: { count: number; samples: Array<{ tracking: string; raw: string; carrier: string }> };
+      other: { count: number; samples: Array<{ tracking: string; raw: string; carrier: string }> };
+      potentialUpsPatterns: string[];
+    } = {
+      ups: { count: 0, samples: [] },
+      fedex: { count: 0, samples: [] },
+      usps: { count: 0, samples: [] },
+      other: { count: 0, samples: [] },
+      potentialUpsPatterns: [],
+    };
+
+    // Known UPS 2D barcode markers
+    const upsMarkers = [
+      "UPSN", // UPS MaxiCode marker
+      "[)>\\x1e06", // UPS 2D format start
+      "\\x1d96", // UPS shipper number field
+    ];
+
+    for (const scan of unknown) {
+      const raw = scan.rawBarcode || "";
+      const tracking = scan.trackingNumber || "";
+      const carrier = scan.carrier || "";
+
+      // Check for UPS patterns
+      const isUPS =
+        raw.includes("UPSN") ||
+        tracking.startsWith("1Z") ||
+        carrier.toLowerCase().includes("ups") ||
+        raw.includes("\x1e06") || // UPS 2D format
+        /1Z[A-Z0-9]{16}/.test(raw); // 1Z tracking embedded in raw
+
+      // Check for FedEx patterns
+      const isFedEx =
+        raw.includes("FDEG") ||
+        raw.includes("[)>") ||
+        carrier.toLowerCase().includes("fedex");
+
+      // Check for USPS patterns
+      const isUSPS =
+        carrier.toLowerCase().includes("usps") ||
+        /^(94|93|92|91|90|70|23|13)/.test(tracking) ||
+        raw.includes("USPS");
+
+      if (isUPS) {
+        results.ups.count++;
+        if (results.ups.samples.length < 10) {
+          results.ups.samples.push({ tracking, raw: raw.substring(0, 200), carrier });
+        }
+      } else if (isFedEx) {
+        results.fedex.count++;
+        if (results.fedex.samples.length < 10) {
+          results.fedex.samples.push({ tracking, raw: raw.substring(0, 200), carrier });
+        }
+      } else if (isUSPS) {
+        results.usps.count++;
+        if (results.usps.samples.length < 10) {
+          results.usps.samples.push({ tracking, raw: raw.substring(0, 200), carrier });
+        }
+      } else {
+        results.other.count++;
+        if (results.other.samples.length < 20) {
+          results.other.samples.push({ tracking, raw: raw.substring(0, 200), carrier });
+        }
+      }
+
+      // Look for potential UPS shipper numbers in raw barcode
+      // UPS shipper numbers are typically 6 characters after a control character
+      const shipperMatch = raw.match(/\x1d96([A-Z0-9]{6})/);
+      if (shipperMatch && !results.potentialUpsPatterns.includes(shipperMatch[1])) {
+        results.potentialUpsPatterns.push(shipperMatch[1]);
+      }
+    }
+
+    return results;
+  },
+});
+
+// Get duplicate scans report - shows who added duplicates and when (training opportunities)
+export const getDuplicateScansReport = query({
+  args: {},
+  handler: async (ctx) => {
+    const scans = await ctx.db.query("scans").collect();
+    const users = await ctx.db.query("users").collect();
+    const trucks = await ctx.db.query("trucks").collect();
+
+    // Find all scans marked as duplicates
+    const duplicates = scans.filter((scan) => scan.isDuplicate === true);
+
+    // Group by user for "needs training" report
+    const byUser: Record<string, {
+      userId: string;
+      userName: string;
+      duplicateCount: number;
+      duplicates: Array<{
+        trackingNumber: string;
+        scannedAt: number;
+        duplicateAddedAt?: number;
+        truckNumber: string;
+      }>;
+    }> = {};
+
+    for (const dup of duplicates) {
+      const user = users.find((u) => u._id === dup.scannedBy);
+      const truck = trucks.find((t) => t._id === dup.truckId);
+      const userName = user?.name ?? "Unknown";
+      const userId = dup.scannedBy;
+
+      if (!byUser[userId]) {
+        byUser[userId] = {
+          userId,
+          userName,
+          duplicateCount: 0,
+          duplicates: [],
+        };
+      }
+
+      byUser[userId].duplicateCount++;
+      byUser[userId].duplicates.push({
+        trackingNumber: dup.trackingNumber,
+        scannedAt: dup.scannedAt,
+        duplicateAddedAt: dup.duplicateAddedAt,
+        truckNumber: truck?.truckNumber ?? "Unknown",
+      });
+    }
+
+    // Sort users by duplicate count (worst offenders first)
+    const userList = Object.values(byUser).sort((a, b) => b.duplicateCount - a.duplicateCount);
+
+    // Calculate overall stats
+    const totalDuplicates = duplicates.length;
+    const totalScans = scans.length;
+    const duplicateRate = totalScans > 0 ? (totalDuplicates / totalScans) * 100 : 0;
+
+    // Get monthly stats
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const monthStart = startOfMonth.getTime();
+
+    const monthlyDuplicates = duplicates.filter((d) => d.scannedAt >= monthStart);
+    const monthlyScans = scans.filter((s) => s.scannedAt >= monthStart);
+    const monthlyDuplicateRate = monthlyScans.length > 0
+      ? (monthlyDuplicates.length / monthlyScans.length) * 100
+      : 0;
+
+    return {
+      users: userList,
+      overall: {
+        totalDuplicates,
+        totalScans,
+        duplicateRate,
+      },
+      monthly: {
+        monthName: now.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
+        totalDuplicates: monthlyDuplicates.length,
+        totalScans: monthlyScans.length,
+        duplicateRate: monthlyDuplicateRate,
+      },
+    };
   },
 });
