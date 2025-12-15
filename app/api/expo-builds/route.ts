@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 
 const EXPO_PROJECT_ID = "db81ed28-c7a4-44a8-a2c4-ef40e4ed7502";
 
+// Force dynamic - never cache build data
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   try {
     // EAS API to get builds - uses GraphQL
@@ -33,16 +37,23 @@ export async function GET() {
         variables: {
           appId: EXPO_PROJECT_ID,
           platform: "ANDROID",
-          limit: 5,
+          limit: 10, // Fetch more builds to ensure we get latest production
         },
       }),
+      // Disable Next.js fetch caching
+      cache: "no-store",
     });
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Expo API error:", errorText);
       return NextResponse.json(
-        { error: "Failed to fetch builds from Expo", details: errorText },
+        {
+          success: false,
+          error: "Failed to fetch builds from Expo",
+          details: errorText,
+          timestamp: new Date().toISOString(),
+        },
         { status: 500 }
       );
     }
@@ -52,29 +63,42 @@ export async function GET() {
     if (data.errors) {
       console.error("GraphQL errors:", data.errors);
       return NextResponse.json(
-        { error: "GraphQL error", details: data.errors },
+        {
+          success: false,
+          error: "GraphQL error",
+          details: data.errors,
+          timestamp: new Date().toISOString(),
+        },
         { status: 500 }
       );
     }
 
     const builds = data.data?.builds || [];
 
-    // Get the latest production build
-    const latestBuild = builds.find(
+    // Sort by completedAt descending to ensure latest is first
+    const sortedBuilds = [...builds].sort((a, b) =>
+      new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
+    );
+
+    // Get the latest production build (prioritize production profile)
+    const latestBuild = sortedBuilds.find(
       (b: { buildProfile: string }) => b.buildProfile === "production"
-    ) || builds[0];
+    ) || sortedBuilds[0];
 
     return NextResponse.json({
       success: true,
       latestBuild: latestBuild || null,
-      allBuilds: builds,
+      allBuilds: sortedBuilds,
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("Error fetching Expo builds:", error);
     return NextResponse.json(
       {
+        success: false,
         error: "Failed to fetch builds",
         details: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
       },
       { status: 500 }
     );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Protected } from "../protected";
 import Link from "next/link";
 
@@ -23,34 +23,70 @@ interface BuildsResponse {
   latestBuild: ExpoBuild | null;
   allBuilds: ExpoBuild[];
   error?: string;
+  timestamp?: string;
 }
+
+// Auto-refresh interval (5 minutes)
+const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
+// Max retry attempts
+const MAX_RETRIES = 3;
 
 export default function AppDownloadPage() {
   const [builds, setBuilds] = useState<BuildsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
+  const fetchBuilds = useCallback(async (isRetry = false) => {
+    if (!isRetry) {
+      setLoading(true);
+      setRetryCount(0);
+    }
+    setError(null);
+
+    try {
+      // Add cache-busting query param
+      const response = await fetch(`/api/expo-builds?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to fetch builds");
+      }
+
+      setBuilds(data);
+      setLastFetched(new Date());
+      setRetryCount(0);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      setError(errorMessage);
+
+      // Auto-retry with exponential backoff
+      if (retryCount < MAX_RETRIES) {
+        const delay = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
+        setRetryCount((prev) => prev + 1);
+        setTimeout(() => fetchBuilds(true), delay);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [retryCount]);
+
+  // Initial fetch
   useEffect(() => {
     fetchBuilds();
   }, []);
 
-  const fetchBuilds = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/expo-builds");
-      const data = await response.json();
-      if (!response.ok) {
-        setError(data.error || "Failed to fetch builds");
-      } else {
-        setBuilds(data);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Auto-refresh every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchBuilds();
+    }, AUTO_REFRESH_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [fetchBuilds]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString("en-US", {
@@ -73,7 +109,8 @@ export default function AppDownloadPage() {
               <div className="flex items-center gap-4">
                 <Link
                   href="/"
-                  className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center transition-colors"
+                  className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center justify-center transition-colors min-h-[44px] min-w-[44px]"
+                  aria-label="Back to dashboard"
                 >
                   <svg
                     className="w-5 h-5 text-slate-400"
@@ -93,28 +130,46 @@ export default function AppDownloadPage() {
                   <h1 className="text-xl font-bold">TireTrack Lite App</h1>
                   <p className="text-slate-500 text-sm">
                     Download the latest Android APK
+                    {lastFetched && (
+                      <span className="ml-2 text-slate-600">
+                        • Updated {lastFetched.toLocaleTimeString()}
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>
-              <button
-                onClick={fetchBuilds}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                <svg
-                  className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              <div className="flex items-center gap-2">
+                {retryCount > 0 && retryCount <= MAX_RETRIES && (
+                  <span className="text-amber-400 text-xs flex items-center gap-1">
+                    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Retrying ({retryCount}/{MAX_RETRIES})...
+                  </span>
+                )}
+                <button
+                  onClick={() => fetchBuilds()}
+                  disabled={loading}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 min-h-[44px]"
+                  aria-label="Refresh builds"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                  />
-                </svg>
-                Refresh
-              </button>
+                  <svg
+                    className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                  {loading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -130,8 +185,8 @@ export default function AppDownloadPage() {
               <p className="text-red-400 font-medium">Error loading builds</p>
               <p className="text-slate-500 text-sm mt-1">{error}</p>
               <button
-                onClick={fetchBuilds}
-                className="mt-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg text-sm transition-colors"
+                onClick={() => fetchBuilds()}
+                className="mt-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg text-sm transition-colors min-h-[44px]"
               >
                 Try Again
               </button>
