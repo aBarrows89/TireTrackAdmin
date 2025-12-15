@@ -8,36 +8,67 @@ export const revalidate = 0;
 
 export async function GET() {
   try {
-    // EAS API to get builds - uses GraphQL
+    // Get Expo session from environment variable (from ~/.expo/state.json sessionSecret)
+    // Alternatively, use EXPO_TOKEN for API access tokens
+    const expoSession = process.env.EXPO_SESSION;
+    const expoToken = process.env.EXPO_TOKEN;
+
+    if (!expoSession && !expoToken) {
+      console.error("No Expo authentication configured");
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Expo API authentication not configured",
+          details: "EXPO_SESSION or EXPO_TOKEN environment variable is required",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 500 }
+      );
+    }
+
+    // Updated EAS API GraphQL query for new schema
     const query = `
-      query GetBuilds($appId: String!, $platform: AppPlatform!, $limit: Int!) {
-        builds(appId: $appId, platform: $platform, limit: $limit, status: FINISHED) {
-          id
-          platform
-          status
-          appVersion
-          buildProfile
-          gitCommitHash
-          createdAt
-          completedAt
-          artifacts {
-            buildUrl
+      query GetBuilds($appId: String!, $offset: Int!, $limit: Int!) {
+        app {
+          byId(appId: $appId) {
+            builds(offset: $offset, limit: $limit, filter: { platform: ANDROID, status: FINISHED }) {
+              id
+              platform
+              status
+              appVersion
+              buildProfile
+              gitCommitHash
+              createdAt
+              completedAt
+              artifacts {
+                buildUrl
+              }
+            }
           }
         }
       }
     `;
 
+    // Build headers based on which auth method is available
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (expoToken) {
+      headers["Authorization"] = `Bearer ${expoToken}`;
+    } else if (expoSession) {
+      headers["expo-session"] = expoSession;
+    }
+
     const response = await fetch("https://api.expo.dev/graphql", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         query,
         variables: {
           appId: EXPO_PROJECT_ID,
-          platform: "ANDROID",
-          limit: 10, // Fetch more builds to ensure we get latest production
+          offset: 0,
+          limit: 10,
         },
       }),
       // Disable Next.js fetch caching
@@ -73,7 +104,7 @@ export async function GET() {
       );
     }
 
-    const builds = data.data?.builds || [];
+    const builds = data.data?.app?.byId?.builds || [];
 
     // Sort by completedAt descending to ensure latest is first
     const sortedBuilds = [...builds].sort((a, b) =>
