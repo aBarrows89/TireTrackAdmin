@@ -213,7 +213,7 @@ export default function AppDownloadPage() {
                   </div>
                   <div>
                     <h2 className="text-lg font-bold text-white">
-                      Latest Production Build
+                      Latest APK Build
                     </h2>
                     <p className="text-purple-300 text-sm">
                       Version {builds.latestBuild.appVersion || "1.0.0"}

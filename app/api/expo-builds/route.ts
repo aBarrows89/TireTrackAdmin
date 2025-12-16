@@ -111,15 +111,20 @@ export async function GET() {
       new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
     );
 
-    // Get the latest production build (prioritize production profile)
-    const latestBuild = sortedBuilds.find(
-      (b: { buildProfile: string }) => b.buildProfile === "production"
-    ) || sortedBuilds[0];
+    // Filter for APK builds only (preview profile generates APKs, production generates AABs)
+    // APK files end with .apk, AAB files end with .aab
+    const apkBuilds = sortedBuilds.filter(
+      (b: { artifacts?: { buildUrl?: string } }) =>
+        b.artifacts?.buildUrl?.endsWith('.apk')
+    );
+
+    // Get the latest APK build (preview profile)
+    const latestBuild = apkBuilds[0] || null;
 
     return NextResponse.json({
       success: true,
-      latestBuild: latestBuild || null,
-      allBuilds: sortedBuilds,
+      latestBuild: latestBuild,
+      allBuilds: apkBuilds,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
