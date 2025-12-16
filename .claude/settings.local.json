@@ -58,7 +58,8 @@
       "Bash(CONVEX_DEPLOYMENT=dev:quiet-rat-621 npx convex run:*)",
       "Bash(CONVEX_DEPLOYMENT=dev:quiet-rat-621 npx convex logs:*)",
       "Bash(CONVEX_DEPLOYMENT=dev:quiet-rat-621 npx convex deploy:*)",
-      "Bash(npx eas:*)"
+      "Bash(npx eas:*)",
+      "WebFetch(domain:main.d2ebobv69m7b3f.amplifyapp.com)"
     ]
   }
 }
