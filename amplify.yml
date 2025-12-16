@@ -10,6 +10,9 @@ frontend:
         - npm install
     build:
       commands:
+        # Write environment variables to .env.production for Next.js standalone build
+        - echo "EXPO_TOKEN=$EXPO_TOKEN" >> .env.production
+        - echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next
