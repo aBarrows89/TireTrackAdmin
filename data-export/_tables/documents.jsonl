@@ -1,0 +1,10 @@
+{"name":"locations","id":10001}
+{"name":"scans","id":10002}
+{"name":"trucks","id":10003}
+{"name":"users","id":10004}
+{"name":"returnBatches","id":10005}
+{"name":"returnItems","id":10006}
+{"name":"tireUPCs","id":10007}
+{"name":"vendorAccounts","id":10008}
+{"name":"adminUsers","id":10009}
+{"name":"auditLogs","id":10010}

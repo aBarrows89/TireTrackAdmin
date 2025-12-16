@@ -20,6 +20,12 @@ export async function GET() {
           success: false,
           error: "Expo API authentication not configured",
           details: "EXPO_SESSION or EXPO_TOKEN environment variable is required",
+          debug: {
+            hasExpoToken: !!process.env.EXPO_TOKEN,
+            hasExpoSession: !!process.env.EXPO_SESSION,
+            tokenLength: process.env.EXPO_TOKEN?.length || 0,
+            envKeys: Object.keys(process.env).filter(k => k.includes('EXPO')),
+          },
           timestamp: new Date().toISOString(),
         },
         { status: 500 }

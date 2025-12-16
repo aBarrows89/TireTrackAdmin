@@ -1,0 +1,1 @@
+"{\"_creationTime\": normalfloat64, \"_id\": \"k57beqm5p0nff342kd6yq8z0t57wz9dv\", \"allowedLocations\": array<\"all\">, \"createdAt\": normalfloat64, \"email\": field_name, \"forcePasswordChange\": boolean, \"isActive\": boolean, \"lastLoginAt\": normalfloat64, \"name\": field_name, \"passwordHash\": field_name, \"role\": \"superadmin\"}"
